@@ -9,6 +9,10 @@ The recipes run on [HookScope](https://github.com/chinmaya-chhatre/hookscope-pro
 receiver that verifies signatures, retries deliveries and lets you replay events.
 
 > **Status: in development.** Completed and planned recipes are listed below.
+>
+> What exists so far: [`common/`](common), signed-request builders and ready-made example events
+> for GitHub, Stripe, Shopify, Slack, Twilio, Svix and generic HMAC senders, checked against the
+> providers' published test vectors (run `python -m pytest`).
 
 ## Who it is for
 
