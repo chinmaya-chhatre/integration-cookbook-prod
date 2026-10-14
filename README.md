@@ -13,7 +13,10 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 > What exists so far: [`common/`](common), signed-request builders and ready-made example events
 > for GitHub, Stripe, Shopify, Slack, Twilio, Svix and generic HMAC senders, checked against the
 > providers' published test vectors, and `common/mocks/`, Jira-, CRM- and warehouse-style mock
-> servers that can be told to answer 500, 429 or slowly (run `python -m pytest`).
+> servers that can be told to answer 500, 429 or slowly.
+>
+> Try it: `pip install -r requirements-dev.txt`, then `make test` (or `make test RECIPE=<name>`), `make check` for
+> lint plus tests, and `make up` to start HookScope with Docker (`make help` lists everything).
 
 ## Who it is for
 

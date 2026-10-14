@@ -6,4 +6,4 @@ target-version = "py311"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["common", "recipes"]
+testpaths = ["common", "recipes", "tests"]

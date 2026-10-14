@@ -1,0 +1,31 @@
+# The HookScope service every recipe runs against. A recipe's own docker-compose.yml adds its
+# mock targets and handler and talks to http://hookscope:8000. Start it with `make up`.
+#
+# The webhook secrets come from .env (`make env` writes it from common/fixtures.py), so they
+# are not repeated in this file. HOOKSCOPE_RULES_FILE points at the recipe's rules.
+name: cookbook
+
+services:
+  hookscope:
+    # Built from source until a published image exists; the first build takes a minute.
+    build:
+      context: https://github.com/chinmaya-chhatre/hookscope-prod.git#main
+    image: hookscope-cookbook
+    ports:
+      - "${HOOKSCOPE_PORT:-8000}:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOOKSCOPE_RULES: /config/rules.json
+    volumes:
+      - ${HOOKSCOPE_RULES_FILE:-./common/rules.empty.json}:/config/rules.json:ro
+      - hookscope-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  hookscope-data:
