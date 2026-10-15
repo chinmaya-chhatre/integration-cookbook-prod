@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: make lint
+
+  test:
+    name: test (python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements-dev.txt
+      - run: make test
+
+  compose:
+    name: compose files are valid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: make config PYTHON=python
+
+  discover:
+    name: find recipes
+    runs-on: ubuntu-latest
+    outputs:
+      recipes: ${{ steps.list.outputs.recipes }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: list
+        run: echo "recipes=$(python3 scripts/list_recipes.py)" >> "$GITHUB_OUTPUT"
+
+  recipe:
+    # One job per recipe, so a failure names the recipe. A recipe with no tests fails here:
+    # pytest exits non-zero when it collects nothing, and a recipe does not ship without tests.
+    name: recipe ${{ matrix.recipe }}
+    needs: discover
+    if: needs.discover.outputs.recipes != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        recipe: ${{ fromJSON(needs.discover.outputs.recipes) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements-dev.txt
+      - run: make test RECIPE=${{ matrix.recipe }}

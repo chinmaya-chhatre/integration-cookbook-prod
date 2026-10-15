@@ -1,5 +1,7 @@
 # integration-cookbook
 
+[![CI](https://github.com/chinmaya-chhatre/integration-cookbook-prod/actions/workflows/ci.yml/badge.svg)](https://github.com/chinmaya-chhatre/integration-cookbook-prod/actions/workflows/ci.yml)
+
 Runnable, tested integration recipes for the problems customers actually bring to a Solutions
 Engineer: "our webhook never arrives", "events show up twice", "the target was down for an
 hour, what did we lose?". Each recipe is a small, complete integration with tests for the ways
@@ -16,7 +18,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 > servers that can be told to answer 500, 429 or slowly.
 >
 > Try it: `pip install -r requirements-dev.txt`, then `make test` (or `make test RECIPE=<name>`), `make check` for
-> lint plus tests, and `make up` to start HookScope with Docker (`make help` lists everything).
+> lint plus tests (what CI runs: lint, tests on Python 3.11 and 3.12, the compose files, and one job per recipe), and `make up` to start HookScope with Docker (`make help` lists everything).
 
 ## Who it is for
 
