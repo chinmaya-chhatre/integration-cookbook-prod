@@ -15,6 +15,18 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: make lint
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: make docs
+      - name: External links (informational; other people's sites go down)
+        continue-on-error: true
+        run: python scripts/check_docs.py --external
+
   test:
     name: test (python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

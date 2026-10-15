@@ -18,7 +18,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 > servers that can be told to answer 500, 429 or slowly.
 >
 > Try it: `pip install -r requirements-dev.txt`, then `make test` (or `make test RECIPE=<name>`), `make check` for
-> lint plus tests (what CI runs: lint, tests on Python 3.11 and 3.12, the compose files, and one job per recipe), and `make up` to start HookScope with Docker (`make help` lists everything).
+> lint plus tests (what CI runs: lint, Markdown link and diagram checks, tests on Python 3.11 and 3.12, the compose files, and one job per recipe), and `make up` to start HookScope with Docker (`make help` lists everything).
 
 ## Who it is for
 

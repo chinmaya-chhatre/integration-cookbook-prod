@@ -7,7 +7,7 @@ RECIPE_DIR := recipes/$(RECIPE)
 TEST_PATHS := $(if $(RECIPE),$(RECIPE_DIR),common recipes tests)
 COMPOSE_FILES := -f docker-compose.base.yml $(if $(wildcard $(RECIPE_DIR)/docker-compose.yml),-f $(RECIPE_DIR)/docker-compose.yml)
 
-.PHONY: help test lint format check env up down logs config check-recipe
+.PHONY: help test lint format docs check env up down logs config check-recipe
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  make %-8s %s\n", $$1, $$2}'
@@ -28,7 +28,10 @@ lint: ## Lint and check formatting
 format: ## Format the code
 	$(PYTHON) -m ruff format .
 
-check: lint test ## Everything CI runs
+docs: ## Check Markdown links and Mermaid diagrams
+	$(PYTHON) scripts/check_docs.py
+
+check: lint docs test ## Everything CI runs
 
 env: ## Write .env with the demo webhook secrets
 	$(PYTHON) -m common.env > .env

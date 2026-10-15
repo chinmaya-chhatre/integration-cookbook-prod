@@ -48,7 +48,14 @@ def test_workflow_runs_on_push_and_pull_request():
 
 def test_workflow_runs_the_same_commands_a_contributor_does():
     steps = [step.get("run", "") for job in WORKFLOW["jobs"].values() for step in job["steps"]]
-    for command in ("make lint", "make test", "make config PYTHON=python", "scripts/list_recipes.py"):
+    for command in (
+        "make lint",
+        "make docs",
+        "scripts/check_docs.py --external",
+        "make test",
+        "make config PYTHON=python",
+        "scripts/list_recipes.py",
+    ):
         assert any(command in step for step in steps), command
 
 
