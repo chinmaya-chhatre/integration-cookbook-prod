@@ -30,7 +30,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 
 | # | Recipe | The problem it solves |
 |---|---|---|
-| R1 | **stripe-invoice-paid-to-slack** | Tell finance about paid invoices above a threshold, in a readable message |
+| R1 | [**stripe-invoice-paid-to-slack**](recipes/stripe-invoice-paid-to-slack) *(in progress)* | Tell finance about paid invoices above a threshold, in a readable message |
 | R2 | **github-pr-to-jira** | Create and transition Jira issues from pull request events, once per PR |
 | R3 | **shopify-order-to-warehouse** | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
 | R4 | **stripe-subscription-lifecycle-to-crm** | Keep a CRM correct when subscription events arrive out of order or twice |

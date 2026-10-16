@@ -16,8 +16,12 @@ list_recipes = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(list_recipes)
 
 
-def test_no_recipes_yet():
-    assert list_recipes.recipes(ROOT) == []  # recipes/ only holds _template today
+def test_work_in_progress_recipes_stay_out_of_the_matrix():
+    finished = list_recipes.recipes(ROOT)
+    everything = list_recipes.recipes(ROOT, include_wip=True)
+    assert set(finished) <= set(everything)
+    for name in set(everything) - set(finished):
+        assert (ROOT / "recipes" / name / ".wip").exists()
 
 
 def test_recipes_are_the_non_underscore_folders(tmp_path):
@@ -25,6 +29,16 @@ def test_recipes_are_the_non_underscore_folders(tmp_path):
         (tmp_path / "recipes" / name).mkdir(parents=True)
     (tmp_path / "recipes" / "README.md").write_text("not a recipe")
     assert list_recipes.recipes(tmp_path) == ["github-pr-to-jira", "stripe-invoice-paid-to-slack"]
+
+
+def test_a_wip_marker_hides_a_recipe_until_it_is_removed(tmp_path):
+    for name in ("done-recipe", "half-built"):
+        (tmp_path / "recipes" / name).mkdir(parents=True)
+    (tmp_path / "recipes" / "half-built" / ".wip").write_text("")
+    assert list_recipes.recipes(tmp_path) == ["done-recipe"]
+    assert list_recipes.recipes(tmp_path, include_wip=True) == ["done-recipe", "half-built"]
+    (tmp_path / "recipes" / "half-built" / ".wip").unlink()
+    assert list_recipes.recipes(tmp_path) == ["done-recipe", "half-built"]
 
 
 def test_missing_recipes_folder_is_an_empty_list(tmp_path):
@@ -38,7 +52,14 @@ def test_script_prints_json():
         text=True,
         check=True,
     )
-    assert json.loads(out.stdout) == []
+    assert json.loads(out.stdout) == list_recipes.recipes(ROOT)
+    everything = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "list_recipes.py"), "--all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(everything.stdout) == list_recipes.recipes(ROOT, include_wip=True)
 
 
 def test_workflow_runs_on_push_and_pull_request():

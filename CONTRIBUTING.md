@@ -26,7 +26,7 @@ make check     # what CI runs: lint, docs checks, tests
 
 1. Copy [`recipes/_template/`](recipes/_template/README.md) to `recipes/<name>/`. The name says what
    goes in and what comes out, like `stripe-invoice-paid-to-slack`.
-2. Fill in the README section by section, as you build each part. The skeleton has one section per
+2. Add an empty `recipes/<name>/.wip` file. Fill in the README section by section, as you build each part. The skeleton has one section per
    part of the definition of done below.
 3. Build on what is already here instead of rewriting it:
    - [`common/fixtures.py`](common/fixtures.py) and [`common/signing.py`](common/signing.py) give you
@@ -55,7 +55,9 @@ Complete the following parts before marking a recipe ready for use.
    and metric names, not placeholders.
 7. **Customer pack**: a FAQ, discovery questions and a go-live checklist for this integration.
 
-CI runs one job per recipe and fails a recipe that has no tests.
+CI runs one job per finished recipe and fails a recipe that has no tests. While you are still building
+yours, keep an empty `.wip` file in its folder so CI leaves it out; the commit that adds the last part
+deletes the file, and the recipe joins the matrix.
 
 ## Testing and credentials
 
