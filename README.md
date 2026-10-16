@@ -67,6 +67,10 @@ They have not been validated against vendor production systems and carry no vend
 certification. Cloud examples use configuration validation and LocalStack rather than
 live-account deployment tests.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to add a recipe and what "done" means.
+
 ## License
 
 [MIT](LICENSE)
