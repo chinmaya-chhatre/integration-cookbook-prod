@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "name": "invoice-paid",
+      "source": "stripe",
+      "event_types": ["invoice.paid"],
+      "target_url": "http://handler:8080/stripe/invoice-paid",
+      "retry": {"attempts": 5, "backoff_seconds": 2, "max_backoff_seconds": 60}
+    }
+  ]
+}

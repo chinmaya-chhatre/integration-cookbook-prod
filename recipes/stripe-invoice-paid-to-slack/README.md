@@ -7,7 +7,7 @@ payment twice.
 | Part | Status |
 |---|---|
 | 1. Problem and architecture | done |
-| 2. Config | next |
+| 2. Config | done (the handler it starts is built in part 3) |
 | 3. Core code | to do |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
@@ -108,8 +108,57 @@ by the tests is built by `common/fixtures.py`: `stripe_invoice_paid()`.
 
 ## 2. Config
 
-_Next commit: the HookScope rules file and a `docker-compose.yml` that runs HookScope, the handler and
-a mock Slack with one command._
+Three files describe the setup; nothing here is code.
+
+| File | What it does |
+|---|---|
+| [`rules.json`](rules.json) | HookScope's forwarding rule: events from `stripe` of type `invoice.paid` go to the handler, with up to 5 attempts and exponential backoff from 2 s to 60 s |
+| [`docker-compose.yml`](docker-compose.yml) | Adds the handler and a mock Slack to HookScope (from the repository's base compose file) and makes HookScope wait for the handler to be healthy |
+| [`recipe.env`](recipe.env) | The handler's settings: the per-currency thresholds and how many event ids to remember |
+
+### The rule
+
+```json
+{
+  "name": "invoice-paid",
+  "source": "stripe",
+  "event_types": ["invoice.paid"],
+  "target_url": "http://handler:8080/stripe/invoice-paid",
+  "retry": {"attempts": 5, "backoff_seconds": 2, "max_backoff_seconds": 60}
+}
+```
+
+- `source` and `event_types` keep every other provider and every other Stripe event away from the handler.
+- The retry policy is what turns a Slack or handler outage into a delay instead of a loss: HookScope waits
+  2, 4, 8 and 16 seconds between attempts (longer if the target sends `Retry-After`), then keeps the
+  delivery as a dead letter that can be resent from the dashboard.
+- Only events whose signature verified are forwarded; a forged request is stored and never reaches the handler.
+
+### Settings
+
+| Setting | Where | Meaning |
+|---|---|---|
+| `HOOKSCOPE_SECRET_STRIPE` | `.env`, written by `make env` | The signing secret HookScope verifies with. The demo value comes from `common/fixtures.py`; in production it is the endpoint's `whsec_...` from the Stripe dashboard |
+| `INVOICE_THRESHOLDS` | `recipe.env` | Minimum amount per currency in major units, e.g. `USD:5000,EUR:4500,JPY:750000`. A currency that is not listed never alerts |
+| `SLACK_WEBHOOK_URL` | `docker-compose.yml` | Where the handler posts. It points at the mock Slack; put a real incoming-webhook URL here to try it for real |
+| `DEDUPE_MEMORY` | `recipe.env` | How many Stripe event ids to remember when ignoring redeliveries |
+
+### Run it
+
+```bash
+make env                                              # write .env with the demo secrets
+make up RECIPE=stripe-invoice-paid-to-slack           # HookScope, the handler and a mock Slack
+python -m common.send stripe_invoice_paid amount_paid=500000 currency=usd
+curl localhost:9000/_mock/messages                    # what "Slack" received
+make down RECIPE=stripe-invoice-paid-to-slack
+```
+
+`common.send` signs a realistic `invoice.paid` event the way Stripe does and posts it to HookScope, so the
+whole path runs: verification, the rule, the handler, Slack. Until part 3 adds the handler, `make up` stops
+at building it; the rule, the compose file and the mock Slack are checked by the tests in the meantime.
+
+Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
+this recipe's compose file start with `./recipes/stripe-invoice-paid-to-slack/`.
 
 ## 3. Core code
 

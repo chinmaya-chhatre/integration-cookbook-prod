@@ -1,0 +1,44 @@
+# Runs the recipe: HookScope (from the repo's docker-compose.base.yml) plus the handler and a mock Slack.
+#
+#   make env && make up RECIPE=stripe-invoice-paid-to-slack
+#   python -m common.send stripe_invoice_paid amount_paid=500000 currency=usd
+#   curl localhost:9000/_mock/messages          # what "Slack" received
+#
+# Paths here are relative to the repository root, not to this folder: Compose resolves every
+# file against the first -f file. `make up RECIPE=...` points HookScope at ./rules.json for you.
+services:
+  handler:
+    # Built from handler/ (part 3 of this recipe adds the code and its Dockerfile).
+    build: ./recipes/stripe-invoice-paid-to-slack/handler
+    env_file: ./recipes/stripe-invoice-paid-to-slack/recipe.env
+    environment:
+      # Mock Slack, on the compose network. Point this at a real incoming-webhook URL to try it for real.
+      SLACK_WEBHOOK_URL: http://slack:9000/services/T000/B000/mock
+    depends_on:
+      slack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hookscope:
+    # HookScope forwards to the handler after the handler is up, so a retry is never wasted on boot.
+    depends_on:
+      handler:
+        condition: service_healthy
+
+  slack:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./common:/app/common:ro
+    command: ["python", "-m", "common.mocks", "slack", "--port", "9000"]
+    ports:
+      - "${SLACK_MOCK_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/_mock/messages')"]
+      interval: 3s
+      timeout: 3s
+      retries: 10

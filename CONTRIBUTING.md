@@ -34,8 +34,11 @@ make check     # what CI runs: lint, docs checks, tests
    - [`common/mocks/`](common/mocks) are Jira-, CRM- and warehouse-style servers that can be told to
      answer 500, 429 or slowly. Use them as the target of your recipe.
    - [`docker-compose.base.yml`](docker-compose.base.yml) runs HookScope. Your recipe's own
-     `docker-compose.yml` adds its services and talks to `http://hookscope:8000`; point
-     `HOOKSCOPE_RULES_FILE` at your `rules.json`.
+     `docker-compose.yml` adds its services and talks to `http://hookscope:8000`. If the recipe has a
+     `rules.json`, `make up RECIPE=<name>` loads it into HookScope. Compose paths are relative to the repository
+     root, not to the recipe folder.
+   - `python -m common.send <fixture>` signs one of the fixtures and posts it to a running HookScope;
+     `python -m common.mocks slack` (or `jira`, `crm`, `warehouse`) runs a mock as a compose service.
 4. Run `make test RECIPE=<name>` and `make check` before you push.
 
 ## A recipe is done when it has all seven parts

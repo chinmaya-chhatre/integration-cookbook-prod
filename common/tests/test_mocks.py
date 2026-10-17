@@ -6,7 +6,7 @@ import urllib.request
 
 import pytest
 
-from common.mocks import CrmMock, JiraMock, WarehouseMock, validate_order
+from common.mocks import CrmMock, JiraMock, SlackMock, WarehouseMock, validate_order
 
 
 def call(mock, method, path, payload=None):
@@ -186,3 +186,76 @@ def test_concurrent_requests_are_all_handled(warehouse):
 def test_each_mock_gets_its_own_port():
     with JiraMock() as first, JiraMock() as second:
         assert first.url != second.url
+
+
+# ------------------------------------------------------------------------------ Slack
+
+
+def post_text(mock, path, payload):
+    """POST JSON and return (status, body text); the Slack mock answers in plain text."""
+    request = urllib.request.Request(mock.url + path, data=json.dumps(payload).encode(), method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, response.read().decode()
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode()
+
+
+@pytest.fixture
+def slack():
+    with SlackMock() as mock:
+        yield mock
+
+
+def test_slack_accepts_a_message_and_keeps_it(slack):
+    assert post_text(slack, "/services/T000/B000/xyz", {"text": "hello"}) == (200, "ok")
+    assert post_text(slack, "/services/T000/B000/xyz", {"blocks": [{"type": "section"}]}) == (200, "ok")
+    assert [m.get("text") for m in slack.messages] == ["hello", None]
+    assert call(slack, "GET", "/_mock/messages")[1] == slack.messages
+
+
+def test_slack_rejects_what_slack_rejects(slack):
+    assert post_text(slack, "/services/T/B/x", {"username": "bot"}) == (400, "no_text")
+    assert post_text(slack, "/services/T/B/x", [1, 2]) == (400, "invalid_payload")
+    assert post_text(slack, "/elsewhere", {"text": "x"}) == (404, "no_service")
+    assert post_text(slack, "/services/", {"text": "x"}) == (404, "no_service")
+    assert slack.messages == []
+
+
+def test_slack_failure_injection_works_like_the_others(slack):
+    slack.rate_limit_next(1, retry_after=3)
+    status, _, headers = call(slack, "POST", "/services/T/B/x", {"text": "hi"})
+    assert (status, headers["Retry-After"]) == (429, "3")
+    assert post_text(slack, "/services/T/B/x", {"text": "hi"}) == (200, "ok")
+
+
+def test_a_mock_can_be_served_from_the_command_line():
+    import socket
+    import subprocess
+    import sys
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [sys.executable, "-m", "common.mocks", "slack", "--host", "127.0.0.1", "--port", str(port)],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert "slack mock listening" in process.stdout.readline()
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/services/T/B/x", data=b'{"text": "cli"}', method="POST"
+                )
+                with urllib.request.urlopen(request, timeout=1) as response:
+                    assert response.read() == b"ok"
+                break
+            except OSError:
+                assert time.monotonic() < deadline, "the mock never started"
+                time.sleep(0.05)
+    finally:
+        process.terminate()
+        process.wait(timeout=5)

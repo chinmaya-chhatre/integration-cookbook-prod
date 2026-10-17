@@ -6,6 +6,10 @@ COMPOSE ?= docker compose
 RECIPE_DIR := recipes/$(RECIPE)
 TEST_PATHS := $(if $(RECIPE),$(RECIPE_DIR),common recipes tests)
 COMPOSE_FILES := -f docker-compose.base.yml $(if $(wildcard $(RECIPE_DIR)/docker-compose.yml),-f $(RECIPE_DIR)/docker-compose.yml)
+# A recipe's rules.json is what HookScope loads (compose paths are relative to this folder).
+ifneq ($(and $(RECIPE),$(wildcard $(RECIPE_DIR)/rules.json)),)
+export HOOKSCOPE_RULES_FILE := ./$(RECIPE_DIR)/rules.json
+endif
 
 .PHONY: help test lint format docs check env up down logs config check-recipe
 
@@ -45,5 +49,10 @@ down: check-recipe ## Stop everything and remove its data volume
 logs: check-recipe ## Follow the logs
 	$(COMPOSE) $(COMPOSE_FILES) logs -f
 
-config: check-recipe env ## Validate the compose files
-	$(COMPOSE) $(COMPOSE_FILES) config -q
+config: check-recipe env ## Validate the compose files (the base, and each recipe on top of it)
+	$(COMPOSE) -f docker-compose.base.yml config -q
+	@for file in recipes/*/docker-compose.yml; do \
+		[ -e "$$file" ] || continue; \
+		echo "checking $$file"; \
+		$(COMPOSE) -f docker-compose.base.yml -f "$$file" config -q || exit 1; \
+	done

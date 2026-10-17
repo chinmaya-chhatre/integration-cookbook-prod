@@ -48,9 +48,12 @@ class RecordedRequest:
 
 @dataclass(frozen=True)
 class Reply:
+    """What a mock answers: JSON by default, or plain ``text`` for APIs that answer ``ok``."""
+
     status: int
     body: Any = None
     headers: dict[str, str] = field(default_factory=dict)
+    text: str | None = None
 
 
 class MockServer:
@@ -65,7 +68,8 @@ class MockServer:
 
     # ------------------------------------------------------------------ lifecycle
 
-    def start(self) -> MockServer:
+    def start(self, host: str = "127.0.0.1", port: int = 0) -> MockServer:
+        """Serve in a background thread. Port 0 picks a free one (see ``url``)."""
         mock = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -77,9 +81,13 @@ class MockServer:
                 body = self.rfile.read(length) if length else b""
                 headers = {k.lower(): v for k, v in self.headers.items()}
                 reply = mock._dispatch(self.command, self.path, headers, body)
-                payload = b"" if reply.body is None else json.dumps(reply.body).encode()
+                if reply.text is not None:
+                    payload, content_type = reply.text.encode(), "text/plain; charset=utf-8"
+                else:
+                    payload = b"" if reply.body is None else json.dumps(reply.body).encode()
+                    content_type = "application/json"
                 self.send_response(reply.status)
-                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(payload)))
                 for name, value in reply.headers.items():
                     self.send_header(name, value)
@@ -88,12 +96,23 @@ class MockServer:
 
             do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _serve
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = ThreadingHTTPServer((host, port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
         )
         self._thread.start()
         return self
+
+    def serve_forever(self, host: str = "0.0.0.0", port: int = 8080) -> None:
+        """Run in the foreground until interrupted, for ``python -m common.mocks``."""
+        self.start(host, port)
+        try:
+            assert self._thread
+            self._thread.join()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop()
 
     def stop(self) -> None:
         if self._server:
