@@ -13,12 +13,13 @@ import threading
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from common import fixtures
 from common.mocks import SlackMock
 
+# HookScope brings FastAPI with it; skip before importing either.
 pytest.importorskip("hookscope", reason="install HookScope to run the end-to-end tests")
+from fastapi.testclient import TestClient  # noqa: E402
 from hookscope.main import create_app  # noqa: E402
 from hookscope.rules import parse_rules  # noqa: E402
 from hookscope.store import EventStore  # noqa: E402
