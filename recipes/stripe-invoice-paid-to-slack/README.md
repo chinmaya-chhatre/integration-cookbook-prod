@@ -9,7 +9,7 @@ payment twice.
 | 1. Problem and architecture | done |
 | 2. Config | done (the handler it starts is built in part 3) |
 | 3. Core code | done |
-| 4. Happy-path tests | to do |
+| 4. Happy-path tests | done |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
@@ -194,7 +194,32 @@ repository's Slack mock. Part 4 adds the full path through HookScope.
 
 ## 4. Happy-path tests
 
-_To do: signed `invoice.paid` fixtures through HookScope to the handler._
+[`tests/test_happy_path.py`](tests/test_happy_path.py) sends signed `invoice.paid` events (built by
+`common/fixtures.py`, signed exactly as Stripe signs them) to a real HookScope app running in-process.
+HookScope verifies the signature, stores the event, and forwards it by the recipe's own `rules.json` to the
+handler, which runs as a real HTTP server on a free port. Slack is the repository's mock. The only thing
+changed is the host name in the rule's target URL (`handler:8080` becomes the local port).
+
+| Test | What it proves |
+|---|---|
+| A large USD invoice reaches Slack | Verification, rule match, forward and message work together; HookScope records one 200 forward |
+| The message has everything finance needs | Invoice number, amount, customer, link and event id appear exactly as shown in part 1 |
+| Each currency uses its own threshold | EUR, GBP and zero-decimal JPY alert at their own limits |
+| A small invoice is acknowledged and silent | HookScope answers 202, nothing reaches Slack, and the skip is recorded as a delivered 200 so it is not retried |
+| Distinct invoices each get a message | Two different Stripe events are two messages |
+| Other Stripe events never reach the handler | An `invoice.created` is stored but no rule matches, so there is no forward |
+
+Run them:
+
+```bash
+git clone https://github.com/chinmaya-chhatre/hookscope-prod hookscope-src
+pip install -r hookscope-src/requirements.txt
+PYTHONPATH=hookscope-src make test RECIPE=stripe-invoice-paid-to-slack
+```
+
+Without HookScope importable these tests are skipped, not failed, so a plain `make test` stays usable;
+the recipe's CI job does the setup above, so they always run there. Duplicates, Slack outages and replay
+are the failure modes, and belong to part 5.
 
 ## 5. Failure-mode tests
 

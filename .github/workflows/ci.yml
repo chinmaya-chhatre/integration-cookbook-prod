@@ -78,4 +78,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
+      # The end-to-end tests run HookScope in-process, so they need its source and dependencies.
+      - uses: actions/checkout@v5
+        with:
+          repository: chinmaya-chhatre/hookscope-prod
+          path: hookscope-src
+      - run: pip install -r hookscope-src/requirements.txt
       - run: make test RECIPE=${{ matrix.recipe }}
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hookscope-src
