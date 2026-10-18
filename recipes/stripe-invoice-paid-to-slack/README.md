@@ -8,7 +8,7 @@ payment twice.
 |---|---|
 | 1. Problem and architecture | done |
 | 2. Config | done (the handler it starts is built in part 3) |
-| 3. Core code | to do |
+| 3. Core code | done |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
@@ -154,15 +154,43 @@ make down RECIPE=stripe-invoice-paid-to-slack
 ```
 
 `common.send` signs a realistic `invoice.paid` event the way Stripe does and posts it to HookScope, so the
-whole path runs: verification, the rule, the handler, Slack. Until part 3 adds the handler, `make up` stops
-at building it; the rule, the compose file and the mock Slack are checked by the tests in the meantime.
+whole path runs: verification, the rule, the handler, Slack. `make up` builds the handler from `handler/` (part 3).
 
 Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
 this recipe's compose file start with `./recipes/stripe-invoice-paid-to-slack/`.
 
 ## 3. Core code
 
-_To do: the handler, in small typed functions._
+The handler is one standard-library file, [`handler/app.py`](handler/app.py), with a two-line
+[`Dockerfile`](handler/Dockerfile). It listens on port 8080: `POST /stripe/invoice-paid` for HookScope and
+`GET /healthz` for the compose health check. The decisions live in small functions, separate from HTTP:
+
+| Function | Job |
+|---|---|
+| `parse_thresholds` | Reads `INVOICE_THRESHOLDS`; a malformed or empty value stops the container with a clear message instead of silently alerting on nothing |
+| `major_units` | Stripe's integer to the currency's major unit: cents (/100) for most, none for zero-decimal currencies such as JPY, thousandths for KWD |
+| `is_large` | At or above the threshold for that currency; a currency with no threshold never alerts |
+| `SeenEvents` | The last `DEDUPE_MEMORY` event ids; the oldest is forgotten first |
+| `format_message` | The four-line text finance reads (shown in part 1) |
+| `Handler.handle` | One event in, `(status, body)` out |
+
+What `handle` answers, and why:
+
+| Situation | Answer | Reason |
+|---|---|---|
+| Large invoice, new event | `200 sent` | Slack accepted the message |
+| Below the threshold, unknown currency, wrong event type | `200 skipped` | A deliberate skip is not a failure, so HookScope must not retry it |
+| Event id already handled | `200 skipped` (duplicate) | The same payment is announced once |
+| Body is not JSON, or lacks the invoice fields | `400 unreadable` | The same bytes will never work, so a retry would only repeat the failure |
+| Slack unreachable, or it refused the message | `502 slack_failed` | The one case a retry can fix; HookScope backs off and retries, then keeps a dead letter |
+
+Two details are easy to get wrong. The event id is remembered **after** Slack accepted the message, so a
+retry following a Slack failure still sends. And the memory is in-process: it survives HookScope's retries
+and Stripe's redeliveries, but not a handler restart, which is acceptable here because a duplicate message
+after a restart is an annoyance, not a loss (a shared store such as Redis is the upgrade if it matters).
+
+The decision functions are covered by `tests/test_handler.py`, which runs the handler against the
+repository's Slack mock. Part 4 adds the full path through HookScope.
 
 ## 4. Happy-path tests
 
