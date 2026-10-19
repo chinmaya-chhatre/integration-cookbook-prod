@@ -77,6 +77,13 @@ def major_units(amount: int, currency: str) -> Decimal:
     return Decimal(amount) / (1000 if code in THREE_DECIMAL else 100)
 
 
+def format_amount(amount: int, currency: str) -> str:
+    """``125000, "usd"`` to ``"1,250.00"``; zero-decimal currencies show no decimals, KWD three."""
+    code = currency.upper()
+    places = 0 if code in ZERO_DECIMAL else 3 if code in THREE_DECIMAL else 2
+    return f"{major_units(amount, code):,.{places}f}"
+
+
 def is_large(amount: int, currency: str, thresholds: dict[str, Decimal]) -> bool:
     """At or above the threshold for this currency; a currency without a threshold never alerts."""
     limit = thresholds.get(currency.upper())
@@ -104,11 +111,10 @@ def format_message(event: dict[str, Any]) -> str:
     """The text finance reads: number, amount, customer, link, and which event it came from."""
     invoice = event["data"]["object"]
     currency = str(invoice["currency"]).upper()
-    amount = major_units(invoice["amount_paid"], currency)
-    places = 0 if currency in ZERO_DECIMAL else 3 if currency in THREE_DECIMAL else 2
     mode = "live mode" if event.get("livemode") else "test mode"
     lines = [
-        f"Invoice {invoice.get('number') or invoice['id']} paid: {amount:,.{places}f} {currency}",
+        f"Invoice {invoice.get('number') or invoice['id']} paid: "
+        f"{format_amount(invoice['amount_paid'], currency)} {currency}",
         f"Customer: {invoice.get('customer_email') or invoice.get('customer') or 'unknown'}",
     ]
     if invoice.get("hosted_invoice_url"):
@@ -134,6 +140,11 @@ class Handler:
         self.slack_url = slack_url
         self.seen = SeenEvents(dedupe_memory)
 
+    def skip(self, event_id: str, reason: str) -> tuple[int, dict[str, str]]:
+        """A deliberate non-event: answered 200 so it is not retried, logged so it can be explained."""
+        log.info("skipped %s: %s", event_id, reason)
+        return 200, {"result": "skipped", "reason": reason}
+
     def handle(self, body: bytes) -> tuple[int, dict[str, str]]:
         try:
             event = json.loads(body)
@@ -143,11 +154,15 @@ class Handler:
             # Retrying the same bytes cannot fix them, so this is a 400, not a 5xx.
             return 400, {"result": "unreadable"}
         if event.get("type") != "invoice.paid":
-            return 200, {"result": "skipped", "reason": "not invoice.paid"}
+            return self.skip(event_id, "not invoice.paid")
         if event_id in self.seen:
-            return 200, {"result": "skipped", "reason": "duplicate"}
+            return self.skip(event_id, "duplicate")
         if not is_large(amount, currency, self.thresholds):
-            return 200, {"result": "skipped", "reason": "below threshold"}
+            if currency.upper() not in self.thresholds:
+                return self.skip(event_id, f"no threshold for {currency.upper()}")
+            return self.skip(
+                event_id, f"below threshold ({format_amount(amount, currency)} {currency.upper()})"
+            )
         try:
             post_to_slack(self.slack_url, format_message(event))
         except OSError as exc:
@@ -197,8 +212,11 @@ def main() -> None:
         slack_url = os.environ.get("SLACK_WEBHOOK_URL", "")
         if not slack_url.startswith(("http://", "https://")):
             raise ConfigError("SLACK_WEBHOOK_URL must be an http(s) URL")
-        memory = int(os.environ.get("DEDUPE_MEMORY", "10000"))
-    except (ConfigError, ValueError) as exc:
+        raw_memory = os.environ.get("DEDUPE_MEMORY", "10000")
+        if not raw_memory.isdigit():
+            raise ConfigError(f"DEDUPE_MEMORY must be a whole number, got {raw_memory!r}")
+        memory = int(raw_memory)
+    except ConfigError as exc:
         raise SystemExit(f"invalid configuration: {exc}") from exc
     log.info("thresholds: %s", {code: str(v) for code, v in thresholds.items()})
     make_server(Handler(thresholds, slack_url, memory), 8080).serve_forever()

@@ -85,7 +85,7 @@ def test_a_large_invoice_is_sent_once(handler, slack):
 
 def test_a_small_invoice_sends_nothing(handler, slack):
     status, answer = handler.handle(body(amount_paid=2_900))
-    assert (status, answer["reason"]) == (200, "below threshold")
+    assert (status, answer["reason"]) == (200, "below threshold (29.00 USD)")
     assert slack.messages == []
 
 
@@ -99,3 +99,44 @@ def test_the_oldest_event_ids_are_forgotten():
     for event_id in ("a", "b", "c"):
         seen.add(event_id)
     assert "a" not in seen and "b" in seen and "c" in seen
+
+
+def test_every_skip_is_logged_with_its_reason(handler, caplog):
+    with caplog.at_level("INFO", logger="invoice-handler"):
+        handler.handle(body(amount_paid=2_900, event_id="evt_small"))
+        handler.handle(body(amount_paid=749_999, currency="jpy", event_id="evt_yen"))
+        handler.handle(body(amount_paid=10**9, currency="chf", event_id="evt_chf"))
+        handler.handle(body(amount_paid=500_000, event_id="evt_big"))
+        handler.handle(body(amount_paid=500_000, event_id="evt_big"))
+    assert [r.getMessage() for r in caplog.records] == [
+        "skipped evt_small: below threshold (29.00 USD)",
+        "skipped evt_yen: below threshold (749,999 JPY)",
+        "skipped evt_chf: no threshold for CHF",
+        "sent evt_big",
+        "skipped evt_big: duplicate",
+    ]
+
+
+def test_a_slack_failure_is_logged_with_the_event_id(handler, slack, caplog):
+    slack.fail_next(1, status=500)
+    with caplog.at_level("WARNING", logger="invoice-handler"):
+        assert handler.handle(body(amount_paid=500_000))[0] == 502
+    assert caplog.records[0].getMessage().startswith("slack unreachable or refused evt_1QxAcmePaid:")
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"INVOICE_THRESHOLDS": "USD:abc"}, "cannot read 'USD:abc'"),
+        ({"INVOICE_THRESHOLDS": ""}, "INVOICE_THRESHOLDS is empty"),
+        ({"SLACK_WEBHOOK_URL": "hooks.slack.com/x"}, "SLACK_WEBHOOK_URL must be an http(s) URL"),
+        ({"DEDUPE_MEMORY": "lots"}, "DEDUPE_MEMORY must be a whole number, got 'lots'"),
+    ],
+)
+def test_the_container_refuses_to_start_on_bad_settings(monkeypatch, env, message):
+    good = {"INVOICE_THRESHOLDS": "USD:5000", "SLACK_WEBHOOK_URL": "http://slack.test/x"}
+    for name, value in {**good, **env}.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(SystemExit) as stop:
+        app.main()
+    assert message in str(stop.value) and str(stop.value).startswith("invalid configuration:")

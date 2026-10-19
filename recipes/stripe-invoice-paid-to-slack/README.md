@@ -11,7 +11,7 @@ payment twice.
 | 3. Core code | done |
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
-| 6. Troubleshooting | to do |
+| 6. Troubleshooting | done |
 | 7. Customer pack | to do |
 
 ## 1. Problem and architecture
@@ -246,7 +246,74 @@ is where spotting them belongs.
 
 ## 6. Troubleshooting
 
-_To do: symptom, cause, how to check and fix, with real log lines._
+Start with the question "did the event arrive, and what did each step say?" Open the event in the HookScope
+dashboard (`http://localhost:8000`) or read the logs with `make logs RECIPE=stripe-invoice-paid-to-slack`.
+The `skipped`, `slack unreachable`, `event received` and `invalid configuration` lines below were captured from
+running this recipe's own setup (the one the tests use); the Slack and DNS error texts in the tables are
+the wording Python's `urllib` produces.
+
+A delivery leaves one line from HookScope when it arrives (`event received`), one from the handler
+(`sent`, `skipped` or `slack unreachable`) and one from HookScope when the forward finishes
+(`forward attempt ... status_code=...`). Where the trail stops tells you where to look.
+
+### No message in Slack
+
+| What you see | Cause | Check and fix |
+|---|---|---|
+| Handler log: `skipped evt_small: below threshold (29.00 USD)` | The invoice is under the threshold | Working as designed. To alert on smaller invoices, lower the currency's value in `INVOICE_THRESHOLDS` (`recipe.env`) and restart the handler |
+| `skipped evt_chf: no threshold for CHF` | The currency is not in `INVOICE_THRESHOLDS`, and an unlisted currency never alerts | Add `CHF:4000` (an amount in whole francs, not centimes) |
+| `skipped evt_big: duplicate` | Stripe or HookScope sent this event id again; the first copy was announced | Nothing to fix. If you replayed an old event on purpose, the handler has seen it: restart it, or send a new event |
+| `forwarded_to: []` in the `202` answer, and no handler line | No rule matched: the event is not `invoice.paid`, or the rule's `source` is not `stripe` | Compare the event's type in the dashboard with `event_types` in `rules.json`. In the Stripe dashboard, make sure the endpoint is subscribed to `invoice.paid` |
+| `event received ... verification=invalid reason=signature mismatch`, answer `401` | The signing secret HookScope uses is not the endpoint's | Copy the endpoint's `whsec_...` from the Stripe dashboard into `HOOKSCOPE_SECRET_STRIPE` and restart HookScope. Rejected events are kept, so you can see them |
+| `verification=invalid reason=timestamp outside tolerance (possible replay)` | The request is older than five minutes, or this machine's clock is wrong | Check the clock (`date -u`). A signed request saved from earlier and posted again by hand will always be too old; to run an old event again use the dashboard's **Re-send**, which forwards the stored event without checking the signature a second time |
+| `verification=unsigned reason=missing Stripe-Signature header` | The request did not come from Stripe, or a proxy removed the header | Check that the proxy forwards the `Stripe-Signature` header and the exact body bytes |
+| `verification=no_secret reason=no secret configured for 'stripe'` | `HOOKSCOPE_SECRET_STRIPE` is not set | Run `make env`, or set the variable, and restart HookScope |
+
+A rejected or unmatched event is never forwarded, so the handler line is missing by design in those rows.
+
+### Slack is failing
+
+```text
+invoice-handler WARNING slack unreachable or refused evt_down: HTTP Error 503: Service Unavailable
+hookscope WARNING forward attempt event_id=3 rule=invoice-paid attempt=1 status_code=502 elapsed_ms=5 error=None
+... the same pair for attempts 2, 3, 4 and 5 ...
+```
+
+The handler answers `502` and HookScope retries with backoff, five attempts in all. After that the delivery is a
+**dead letter**: the dashboard lists it with a **Re-send** button, and so does `GET /api/dead-letters`.
+
+| Cause | Fix |
+|---|---|
+| Slack is down or rate limiting (`HTTP Error 429` or `5xx`) | Wait for Slack, then re-send the dead letters. Nothing was lost, and a re-sent invoice is announced once |
+| `HTTP Error 404: Not Found` or `403` | The webhook URL was revoked or mistyped. Create a new incoming webhook, set `SLACK_WEBHOOK_URL`, restart the handler, then re-send. The handler turns every Slack failure into a `502`, so these are retried five times before they become dead letters |
+| `slack unreachable ...: <urlopen error [Errno -2] Name or service not known>` | The handler cannot resolve the host: a typo in the URL, or no outbound DNS from the container |
+| `status_code=None error=...` on the HookScope line | HookScope cannot reach the handler at all. Check `docker compose ps`: the handler must be healthy (it listens on 8080 and answers `/healthz`) |
+
+### The handler will not start
+
+The container prints one line and exits with status 1. Fix the named setting in `recipe.env` (or the
+compose file for `SLACK_WEBHOOK_URL`):
+
+```text
+invalid configuration: INVOICE_THRESHOLDS: cannot read 'USD:abc', expected CODE:AMOUNT, e.g. USD:5000
+invalid configuration: INVOICE_THRESHOLDS is empty, so no invoice could ever alert
+invalid configuration: SLACK_WEBHOOK_URL must be an http(s) URL
+invalid configuration: DEDUPE_MEMORY must be a whole number, got 'lots'
+```
+
+HookScope waits for the handler's health check, so a handler that cannot start also keeps `make up` from
+finishing: `docker compose logs handler` shows the line.
+
+### Known limits
+
+- **A handler restart forgets the event ids it has seen.** A redelivery that arrives after a restart is
+  announced again. Rare, and a duplicate message is an annoyance rather than a loss; a shared store such as
+  Redis is the fix if it matters to the customer.
+- **Slow Slack.** The handler waits up to 10 seconds for Slack; a Slack slower than that counts as a
+  failure and is retried, which can produce a second message if Slack did accept the first one. Rare in
+  practice because Slack answers in well under a second.
+- **Amounts are the invoice's `amount_paid`.** Partial payments and credit notes show the amount actually
+  paid on that event, not the invoice total.
 
 ## 7. Customer pack
 
