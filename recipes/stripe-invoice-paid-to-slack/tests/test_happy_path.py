@@ -1,75 +1,22 @@
 """Signed invoice.paid events end to end: HookScope verifies and forwards, the handler decides.
 
-HookScope runs in-process, so its source must be importable: clone chinmaya-chhatre/hookscope,
-run ``pip install -r requirements.txt`` there and put the clone on ``PYTHONPATH`` (the CI job for a recipe
-does exactly that). Without it these tests are skipped, not failed. The handler runs as a real HTTP
-server on a free port and Slack is the repository's mock, so the only thing replaced is the network name
-in ``rules.json``.
+The fixtures in ``conftest.py`` run HookScope in-process and the handler as a real HTTP server, with the
+repository's Slack mock behind it; without HookScope importable these tests are skipped, not failed.
 """
 
-import importlib.util
 import json
-import threading
-from pathlib import Path
 
 import pytest
 
 from common import fixtures
-from common.mocks import SlackMock
-
-# HookScope brings FastAPI with it; skip before importing either.
-pytest.importorskip("hookscope", reason="install HookScope to run the end-to-end tests")
-from fastapi.testclient import TestClient  # noqa: E402
-from hookscope.main import create_app  # noqa: E402
-from hookscope.rules import parse_rules  # noqa: E402
-from hookscope.store import EventStore  # noqa: E402
-
-RECIPE = Path(__file__).parent.parent
-_spec = importlib.util.spec_from_file_location("invoice_handler", RECIPE / "handler" / "app.py")
-app = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(app)
-
-THRESHOLDS = app.parse_thresholds("USD:5000,EUR:4500,GBP:4000,JPY:750000")
 
 
-@pytest.fixture
-def slack():
-    with SlackMock() as mock:
-        yield mock
-
-
-@pytest.fixture
-def handler_url(slack):
-    handler = app.Handler(THRESHOLDS, slack.url + "/services/T0/B0/x", dedupe_memory=100)
-    server = app.make_server(handler, 0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{server.server_address[1]}"
-    server.shutdown()
-    server.server_close()
-
-
-@pytest.fixture
-def hookscope(tmp_path, handler_url):
-    """HookScope with the recipe's own rule, pointed at the handler running on this machine."""
-    data = json.loads((RECIPE / "rules.json").read_text())
-    for rule in data["rules"]:
-        rule["target_url"] = rule["target_url"].replace("http://handler:8080", handler_url)
-    app_ = create_app(
-        store=EventStore(str(tmp_path / "events.db")),
-        secrets={"stripe": fixtures.SECRETS["stripe"]},
-        rules=parse_rules(data),
-        admin_password=None,
-    )
-    return TestClient(app_)
-
-
-def send(client: TestClient, **kwargs):
+def send(client, **kwargs):
     request = fixtures.stripe_invoice_paid(**kwargs)
     return client.post("/hooks/stripe", content=request.body, headers=request.all_headers())
 
 
-def forwards(client: TestClient) -> list[dict]:
+def forwards(client) -> list[dict]:
     return client.get("/api/events/1/forwards").json()
 
 

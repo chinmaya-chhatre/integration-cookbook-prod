@@ -10,7 +10,7 @@ payment twice.
 | 2. Config | done (the handler it starts is built in part 3) |
 | 3. Core code | done |
 | 4. Happy-path tests | done |
-| 5. Failure-mode tests | to do |
+| 5. Failure-mode tests | done |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
 
@@ -223,8 +223,26 @@ are the failure modes, and belong to part 5.
 
 ## 5. Failure-mode tests
 
-_To do: duplicates, Slack 429 and 500, a below-threshold invoice, zero-decimal currencies, replay after
-a Slack outage._
+[`tests/test_failures.py`](tests/test_failures.py) uses the same setup as part 4 and scripts what goes
+wrong. Slack's failures come from the mock (`fail_next`, `rate_limit_next`); HookScope's retries follow this
+recipe's `rules.json` (5 attempts), with the backoff wait skipped so the suite stays fast.
+
+| Failure | What the test shows |
+|---|---|
+| Stripe redelivers the same event | Both deliveries are stored and forwarded, Slack gets one message, the handler answers the repeat with a quiet 200 |
+| A second event about the same invoice | It is news: two event ids, two messages |
+| Slack answers 500 or 429 once | The handler answers 502, HookScope retries, the retry gets through: forward statuses `[502, 200]`, one message, no dead letter |
+| A failed attempt must not count as seen | Otherwise the retry would be skipped as a duplicate and the message lost; this test and the two above fail if the handler remembers the id before Slack accepts it |
+| Slack is down for every attempt | Five 502s, no message, one dead letter that is marked resendable |
+| Slack comes back, the dead letter is re-sent | The message is delivered once, the dead letter clears, and a second click on re-send does not announce it again |
+| Below the threshold, an unlisted currency, one yen under | Slack is not called at all and HookScope sees a single successful attempt, so nothing is retried |
+| The JPY boundary | 750,000 JPY alerts as `750,000 JPY`: yen have no cents, so the amount is not divided by 100 |
+| Forged signature, tampered body | `401`, stored for debugging, never forwarded, nothing in Slack |
+
+The failure tests cover retrying a failed Slack delivery without incorrectly marking the event
+as already delivered. What this part does **not** cover: the handler restarting (its duplicate memory
+is in-process, see part 3) and Slack being slow rather than failing; both are known limits, and part 6
+is where spotting them belongs.
 
 ## 6. Troubleshooting
 
