@@ -12,7 +12,7 @@ payment twice.
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
 | 6. Troubleshooting | done |
-| 7. Customer pack | to do |
+| 7. Customer pack | done |
 
 ## 1. Problem and architecture
 
@@ -317,4 +317,62 @@ finishing: `docker compose logs handler` shows the line.
 
 ## 7. Customer pack
 
-_To do: FAQ, discovery questions and a go-live checklist._
+What to hand a customer, and what to ask before building it for them. The answers describe this recipe as
+built and tested here; where something is a limit or not built, it says so.
+
+### FAQ
+
+- **Why is the minimum amount not a HookScope rule?** A forwarding rule matches on the provider and the
+  event type, not on values inside the payload, so it cannot say "above $5,000". The amount filter lives in
+  the small handler, where it is plain code with tests. Routing stays in the receiver; business rules stay
+  in code you can read.
+- **How do we change a threshold?** Edit `INVOICE_THRESHOLDS` in `recipe.env` and restart the handler. No
+  HookScope change. Amounts are in whole currency units (`USD:5000` is $5,000.00; `JPY:750000` is ¥750,000).
+- **Will an invoice ever be announced twice?** Not for the same Stripe event: the handler remembers the
+  event ids it announced. The memory is in-process, so a handler restart forgets it (see part 6). A second,
+  different event about the same invoice is announced, because it is news.
+- **What if Slack is down?** Nothing is lost. The handler answers `502`, HookScope retries five times with
+  backoff, and anything still failing becomes a dead letter that can be re-sent from the dashboard once
+  Slack is back. A re-sent invoice is announced once.
+- **Can different currencies or amounts go to different channels?** Not in this recipe: one Slack webhook
+  URL means one channel. It is a small change in the handler (a webhook URL per currency or band); the
+  structure of part 3 is meant for it.
+- **Which events does it handle?** `invoice.paid` only. Refunds, credit notes, failed payments and
+  subscription changes are other event types; each would be a separate rule and handler.
+- **Which amount is shown?** The invoice's `amount_paid` on that event, in the invoice's currency. A
+  partially paid invoice shows what was actually paid, not the invoice total.
+- **Test mode and live mode?** Stripe signs them with different endpoint secrets and sends them to
+  endpoints you create separately. The message ends with `test mode` or `live mode` so nobody mistakes one
+  for the other; point only the live endpoint at the production channel.
+- **Is the signing secret safe?** HookScope verifies every request with the endpoint's `whsec_...` secret
+  (kept in an environment variable, never stored with events) and rejects anything that fails. The Slack
+  webhook URL is itself a secret: keep it out of source control and rotate it if it leaks.
+- **What does this prove about Slack?** Tests run against a mock Slack that answers like the real incoming
+  webhook (`ok`, `invalid_payload`, `no_text`, 429 with `Retry-After`, 5xx). It has not been run against a
+  real workspace here, so do one real message in the customer's workspace before go-live.
+
+### Discovery questions
+
+- What counts as "large": one number, or one per currency? Which currencies do you bill in?
+- Who reads the channel, and what should they do with a message: reconcile, thank, escalate?
+- Do you bill in test mode and live mode, and do you want test payments announced anywhere?
+- Is the customer's email address acceptable in Slack, or should the message show only the customer id?
+- Do partial payments, credit notes or refunds matter to the same people?
+- How many paid invoices a day, at the busiest time, above and below the threshold?
+- Where does this run, and who gets paged when deliveries start failing (dead letters)?
+- Is a duplicate message after a restart acceptable, or does the customer need a shared store for the
+  event ids?
+- Who owns the Slack webhook URL and the Stripe endpoint, and who can rotate either?
+
+### Go-live checklist
+
+- [ ] Signing secret set (`HOOKSCOPE_SECRET_STRIPE`) and verified with a real Stripe test event
+- [ ] Endpoint reachable from Stripe (no proxy rewriting the URL or body)
+- [ ] The Stripe endpoint is subscribed to `invoice.paid` only, one endpoint per mode
+- [ ] Retry and dead-letter behaviour agreed with the customer (five attempts, then re-send by hand)
+- [ ] Alerting on failed deliveries: someone watches the dead-letter list or `/metrics`
+- [ ] `INVOICE_THRESHOLDS` agreed per currency and written down; every billed currency is listed
+- [ ] Real Slack webhook URL in place and one real message seen in the right channel
+- [ ] Message content approved (customer email, invoice link) by whoever owns the data
+- [ ] Handler restart behaviour understood: duplicates after a restart are possible
+- [ ] Handler runs with a restart policy and its `/healthz` is monitored

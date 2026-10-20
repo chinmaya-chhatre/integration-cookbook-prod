@@ -17,6 +17,8 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 > providers' published test vectors, and `common/mocks/`, Jira-, CRM- and warehouse-style mock
 > servers that can be told to answer 500, 429 or slowly.
 >
+> The first finished recipe is [stripe-invoice-paid-to-slack](recipes/stripe-invoice-paid-to-slack): all seven parts, with end-to-end tests that run HookScope in-process.
+>
 > Try it: `pip install -r requirements-dev.txt`, then `make test` (or `make test RECIPE=<name>`), `make check` for
 > lint plus tests (what CI runs: lint, Markdown link and diagram checks, tests on Python 3.11 and 3.12, the compose files, and one job per recipe), and `make up` to start HookScope with Docker (`make help` lists everything).
 
@@ -30,7 +32,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 
 | # | Recipe | The problem it solves |
 |---|---|---|
-| R1 | [**stripe-invoice-paid-to-slack**](recipes/stripe-invoice-paid-to-slack) *(in progress)* | Tell finance about paid invoices above a threshold, in a readable message |
+| R1 | [**stripe-invoice-paid-to-slack**](recipes/stripe-invoice-paid-to-slack) | Tell finance about paid invoices above a threshold, in a readable message |
 | R2 | **github-pr-to-jira** | Create and transition Jira issues from pull request events, once per PR |
 | R3 | **shopify-order-to-warehouse** | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
 | R4 | **stripe-subscription-lifecycle-to-crm** | Keep a CRM correct when subscription events arrive out of order or twice |
