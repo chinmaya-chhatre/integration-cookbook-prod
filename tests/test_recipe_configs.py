@@ -9,7 +9,9 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).parent.parent
-RECIPES = sorted(p for p in (ROOT / "recipes").iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
+ALL = sorted(p for p in (ROOT / "recipes").iterdir() if p.is_dir() and not p.name.startswith(("_", ".")))
+# A recipe still being written has a README before it has config; only finished config is checked here.
+RECIPES = [p for p in ALL if (p / "rules.json").exists() or not (p / ".wip").exists()]
 SOURCES = {"github", "stripe", "shopify", "slack", "twilio", "svix", "generic"}
 BASE = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
 
@@ -98,3 +100,9 @@ def test_make_points_hookscope_at_the_recipes_rules():
     for recipe in RECIPES:
         assert rules_file(f"RECIPE={recipe.name}") == f"[./recipes/{recipe.name}/rules.json]"
     assert rules_file() == "[]"  # with no recipe, the base compose file falls back to empty rules
+
+
+def test_a_recipe_without_config_is_marked_work_in_progress():
+    for recipe in ALL:
+        if not (recipe / "rules.json").exists():
+            assert (recipe / ".wip").exists(), f"{recipe.name} has no rules.json and is not marked .wip"
