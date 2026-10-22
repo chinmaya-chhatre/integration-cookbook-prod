@@ -7,8 +7,8 @@ in the wrong order.
 | Part | Status |
 |---|---|
 | 1. Problem and architecture | done |
-| 2. Config | next |
-| 3. Core code | to do |
+| 2. Config | done (the handler it starts is built in part 3) |
+| 3. Core code | next |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
@@ -125,7 +125,67 @@ event used by the tests is `common/fixtures.py`: `github_pull_request()`.
 
 ## 2. Config
 
-_To do: rules, compose file and settings._
+Three files describe the setup; nothing here is code.
+
+| File | What it does |
+|---|---|
+| [`rules.json`](rules.json) | HookScope's forwarding rule: events from `github` of type `pull_request` go to the handler, with up to 5 attempts and exponential backoff from 2 s to 60 s |
+| [`docker-compose.yml`](docker-compose.yml) | Adds the handler (with a volume for its pull-request-to-issue mapping) and a mock Jira to HookScope, and makes HookScope wait for the handler to be healthy |
+| [`recipe.env`](recipe.env) | The handler's settings: the Jira project, the issue type, the workflow transition ids and where the mapping is kept |
+
+### The rule
+
+```json
+{
+  "name": "pull-request",
+  "source": "github",
+  "event_types": ["pull_request"],
+  "target_url": "http://handler:8080/github/pull-request",
+  "retry": {"attempts": 5, "backoff_seconds": 2, "max_backoff_seconds": 60}
+}
+```
+
+- `source` and `event_types` keep every other provider, and every other GitHub event (`push`, `issues`,
+  `check_run`, ...), away from the handler. For GitHub the event type is the `X-GitHub-Event` header, so
+  `pull_request` is matched there; the `action` inside the payload is the handler's business (part 1).
+- The retry policy is what turns a Jira outage into a delay instead of a loss: HookScope waits 2, 4, 8
+  and 16 seconds between attempts (longer if the target sends `Retry-After`), then keeps the delivery as
+  a dead letter that can be re-sent from the dashboard.
+- Only events whose signature verified are forwarded; a forged request is stored and never reaches the handler.
+
+### Settings
+
+| Setting | Where | Meaning |
+|---|---|---|
+| `HOOKSCOPE_SECRET_GITHUB` | `.env`, written by `make env` | The webhook secret HookScope verifies `X-Hub-Signature-256` with. The demo value comes from `common/fixtures.py`; in production it is the secret you typed into the GitHub webhook settings |
+| `JIRA_BASE_URL` | `docker-compose.yml` | Where the handler calls Jira. It points at the mock; for Jira Cloud it is your site's URL |
+| `JIRA_EMAIL`, `JIRA_API_TOKEN` | `docker-compose.yml` | The account the handler acts as. The mock ignores them and the values here are placeholders; real ones belong in your secret store, not in git |
+| `JIRA_PROJECT` | `recipe.env` | The project key the issues are created in (`PROJ` here) |
+| `JIRA_ISSUE_TYPE` | `recipe.env` | The issue type to create (`Task`) |
+| `JIRA_TRANSITION_TODO`, `JIRA_TRANSITION_DONE` | `recipe.env` | Workflow transition ids. They differ per Jira project, so look yours up with `GET /rest/api/3/issue/<KEY>/transitions`; `11` and `31` are the ids of the repository's mock |
+| `PR_DB` | `recipe.env` | The file holding the pull-request-to-issue mapping, on the `handler-data` volume so a restart keeps it |
+
+The mapping must survive a restart: if it were lost, a redelivery of an old `opened` event would create a
+second issue for a pull request that already has one. That is why it lives on a volume, not in memory.
+
+### Run it
+
+```bash
+make env                                              # write .env with the demo secrets
+make up RECIPE=github-pr-to-jira                      # HookScope, the handler and a mock Jira
+python -m common.send github_pull_request action=opened number=42
+curl localhost:9001/rest/api/3/issue/PROJ-1           # what "Jira" now holds
+python -m common.send github_pull_request action=closed number=42 merged=true
+make down RECIPE=github-pr-to-jira
+```
+
+`common.send` signs a realistic `pull_request` event the way GitHub does and posts it to HookScope, so the
+whole path runs: verification, the rule, the handler, Jira. Until part 3 adds the handler, `make up` stops
+at building it; both compose files validate (`make config`) and the rule and compose checks in
+`tests/test_recipe_configs.py` run on this recipe in the meantime.
+
+Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
+this recipe's compose file start with `./recipes/github-pr-to-jira/`.
 
 ## 3. Core code
 

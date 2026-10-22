@@ -1,0 +1,53 @@
+# Runs the recipe: HookScope (from the repo's docker-compose.base.yml) plus the handler and a mock Jira.
+#
+#   make env && make up RECIPE=github-pr-to-jira
+#   python -m common.send github_pull_request action=opened number=42
+#   curl localhost:9001/rest/api/3/issue/PROJ-1     # what "Jira" now holds
+#
+# Paths here are relative to the repository root, not to this folder: Compose resolves every
+# file against the first -f file. `make up RECIPE=...` points HookScope at ./rules.json for you.
+services:
+  handler:
+    # Built from handler/ (part 3 of this recipe adds the code and its Dockerfile).
+    build: ./recipes/github-pr-to-jira/handler
+    env_file: ./recipes/github-pr-to-jira/recipe.env
+    environment:
+      # Mock Jira, on the compose network. The mock ignores the credentials; for a real Jira Cloud site
+      # set the site's URL, the email of the account and an API token for it (keep them out of git).
+      JIRA_BASE_URL: http://jira:9000
+      JIRA_EMAIL: demo@example.com
+      JIRA_API_TOKEN: demo-token-not-a-real-credential
+    volumes:
+      - handler-data:/data
+    depends_on:
+      jira:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hookscope:
+    # HookScope forwards to the handler after the handler is up, so a retry is never wasted on boot.
+    depends_on:
+      handler:
+        condition: service_healthy
+
+  jira:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./common:/app/common:ro
+    command: ["python", "-m", "common.mocks", "jira", "--port", "9000"]
+    ports:
+      - "${JIRA_MOCK_PORT:-9001}:9000"
+    healthcheck:
+      # Any answer, even the mock's 404 for an unknown issue, proves the server is up.
+      test: ["CMD", "python", "-c", "import urllib.request, urllib.error\ntry:\n    urllib.request.urlopen('http://localhost:9000/rest/api/3/issue/PROJ-0')\nexcept urllib.error.HTTPError:\n    pass"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  handler-data:
