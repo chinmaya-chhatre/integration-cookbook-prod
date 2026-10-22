@@ -79,3 +79,13 @@ def test_make_dry_run_includes_the_recipes_compose_file_only_when_it_exists(tmp_
         for path in recipe.glob("*"):
             path.unlink()
         recipe.rmdir()
+
+
+def test_test_files_have_distinct_names_across_the_repository():
+    """pytest imports test files by base name, so two ``test_handler.py`` files break collection."""
+    names: dict[str, Path] = {}
+    for path in sorted(ROOT.glob("**/test_*.py")):
+        if ".git" in path.parts or "node_modules" in path.parts:
+            continue
+        assert path.name not in names, f"{path} and {names[path.name]} share a name: rename one"
+        names[path.name] = path

@@ -8,8 +8,8 @@ in the wrong order.
 |---|---|
 | 1. Problem and architecture | done |
 | 2. Config | done (the handler it starts is built in part 3) |
-| 3. Core code | next |
-| 4. Happy-path tests | to do |
+| 3. Core code | done |
+| 4. Happy-path tests | next |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
@@ -180,16 +180,57 @@ make down RECIPE=github-pr-to-jira
 ```
 
 `common.send` signs a realistic `pull_request` event the way GitHub does and posts it to HookScope, so the
-whole path runs: verification, the rule, the handler, Jira. Until part 3 adds the handler, `make up` stops
-at building it; both compose files validate (`make config`) and the rule and compose checks in
-`tests/test_recipe_configs.py` run on this recipe in the meantime.
+whole path runs: verification, the rule, the handler, Jira. `make up` builds the handler from `handler/` (part 3).
 
 Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
 this recipe's compose file start with `./recipes/github-pr-to-jira/`.
 
 ## 3. Core code
 
-_To do: the handler, in small typed functions._
+The handler is one standard-library file, [`handler/app.py`](handler/app.py), with a short
+[`Dockerfile`](handler/Dockerfile). It listens on port 8080: `POST /github/pull-request` for HookScope and
+`GET /healthz` for the compose health check. The decisions live in small pieces, separate from HTTP:
+
+| Piece | Job |
+|---|---|
+| `Settings.from_env` | Reads and checks every setting at once; a missing or malformed one stops the container with one line naming all of them |
+| `PullRequests` | The mapping on the volume: pull request id to issue key and last state. `claim` decides who creates the issue |
+| `Jira` | The two calls the recipe needs, creating an issue and moving it, signed in with the configured account |
+| `parse_event`, `wanted_state` | Read the webhook, and say which state the issue should end in (or that the event needs no action) |
+| `Handler.handle` | One event in, `(status, body)` out |
+
+What `handle` answers, and why:
+
+| Situation | Answer | Reason |
+|---|---|---|
+| New pull request, `opened` (or `reopened`, or a merge) | `200 created` | The issue was created (and moved to Done for a merge) |
+| The pull request already has an issue and nothing needs changing | `200 already_linked` | A repeat is not news |
+| Merge of a pull request whose issue is still To Do; reopening a Done one | `200 moved` | The only two moves the handler makes |
+| `edited`, `synchronize`, a label, a review request, closing without merging | `200 skipped` | A deliberate non-event is not a failure, so HookScope must not retry it |
+| Body is not a pull request event | `400 unreadable` | The same bytes will never work, so a retry would only repeat the failure |
+| Jira unreachable, refused the request, or answered 429 or 5xx | `502 jira_failed` | A retry can fix it; HookScope backs off, then keeps a dead letter |
+| Another delivery for the same pull request is creating the issue right now | `503 busy` | Ask HookScope to come back in a moment |
+
+How one issue per pull request is kept true:
+
+- **Claim first, then create.** Before calling Jira the handler claims the pull request id in the database
+  inside one transaction. Of several simultaneous deliveries exactly one is told `claimed`; the rest get
+  `503 busy` and retry after the issue is recorded, so they find it.
+- **Release on failure.** If Jira fails, the claim is given back, so the retry can create the issue; it
+  does not wait for a timeout.
+- **A claim nobody finished is taken over** after 60 seconds (`CLAIM_SECONDS`), so a crash between asking
+  Jira and recording the key does not block a pull request forever. This is the one gap: if Jira had
+  already created the issue before the crash, the takeover creates a second one. Every issue carries the
+  label `github-pr-<id>`, so a search finds duplicates and the troubleshooting section tells you how.
+- **Forward only.** The handler records the state it last set. A repeated or late `opened` finds the issue
+  and changes nothing, so it can never undo a merge; only `reopened` moves a Done issue back to To Do.
+- **Ordering.** A merge for a pull request the handler has never seen creates the issue first and then
+  moves it, so a lost or late `opened` costs nothing.
+
+The decisions are covered by `tests/test_pr_handler.py`, which runs the handler against the repository's Jira
+mock: creation and the issue's text, repeats, a restart, eight simultaneous deliveries, moves, every
+ignored action, unreadable bodies, Jira failing at each step, the claim rules and the settings. Part 4
+adds the full path through HookScope.
 
 ## 4. Happy-path tests
 

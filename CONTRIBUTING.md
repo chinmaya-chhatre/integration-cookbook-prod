@@ -50,7 +50,7 @@ Complete the following parts before marking a recipe ready for use.
 2. **Config**: the HookScope rules and a `docker-compose.yml` that runs the whole recipe with
    `make up RECIPE=<name>`.
 3. **Core code**: the handler or transform, in small typed functions.
-4. **Happy-path tests**: realistic, signed payloads from `common/`, not hand-written headers.
+4. **Happy-path tests**: realistic, signed payloads from `common/`, not hand-written headers. Name test files after the recipe's handler or topic (`test_pr_handler.py`, not `test_handler.py`): pytest imports them by base name, and a test checks that no two files share one.
 5. **Failure-mode tests**: at least retries, duplicates, out-of-order events where they apply, the
    target answering 429 and 500, and replay after an outage. This is what makes a recipe useful to a
    customer; a recipe does not ship without it.
