@@ -9,8 +9,8 @@ in the wrong order.
 | 1. Problem and architecture | done |
 | 2. Config | done (the handler it starts is built in part 3) |
 | 3. Core code | done |
-| 4. Happy-path tests | next |
-| 5. Failure-mode tests | to do |
+| 4. Happy-path tests | done |
+| 5. Failure-mode tests | next |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
 
@@ -234,7 +234,38 @@ adds the full path through HookScope.
 
 ## 4. Happy-path tests
 
-_To do: signed `pull_request` fixtures through HookScope to the handler and Jira._
+[`tests/test_pr_happy_path.py`](tests/test_pr_happy_path.py) sends signed `pull_request` events (built by
+`common/fixtures.py`, signed exactly as GitHub signs them) to a real HookScope app running in-process.
+HookScope verifies the signature, stores the event, and forwards it by the recipe's own `rules.json` to the
+handler, which runs as a real HTTP server on a free port, with the repository's mock Jira behind it. The
+only thing changed is the host name in the rule's target URL (`handler:8080` becomes the local port).
+
+| Test | What it proves |
+|---|---|
+| An opened pull request creates an issue | Verification, rule match, forward and issue creation work together: summary `Review PR #42: ...`, status To Do, one forward answered 200 |
+| The issue links back to the pull request | The description carries the pull request's URL and author |
+| Merging moves the issue to Done | `opened` then `closed` with `merged: true` ends with one issue, Done |
+| Each pull request gets its own issue | Two pull requests, two issues, with their own summaries |
+| Reopening a merged pull request | The same issue goes back to To Do; there is still only one |
+| Closing without merging | HookScope answers 202, Jira is untouched, and the skip is recorded as a delivered 200 so it is not retried |
+| Actions that need no change | `edited`, `synchronize`, `labeled` and `review_requested` are acknowledged and cause no Jira request at all |
+| Other GitHub events | A `push` is stored but matches no rule, so it is never forwarded |
+| The stored event | The pull request stays in HookScope for debugging |
+
+I checked that these tests can fail: with the handler changed so a merge no longer counts as an action,
+the Done test goes red.
+
+Run them:
+
+```bash
+git clone https://github.com/chinmaya-chhatre/hookscope-prod hookscope-src
+pip install -r hookscope-src/requirements.txt
+PYTHONPATH=hookscope-src make test RECIPE=github-pr-to-jira
+```
+
+Without HookScope importable these tests are skipped, not failed, so a plain `make test` stays usable; the
+recipe's CI job does the setup above, so they always run there once the recipe leaves `.wip`. Duplicates,
+out-of-order events, a Jira outage and replay are the failure modes, and belong to part 5.
 
 ## 5. Failure-mode tests
 
