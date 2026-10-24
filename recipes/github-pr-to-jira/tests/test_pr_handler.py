@@ -323,3 +323,36 @@ def test_the_server_answers_health_and_events(app, handler, jira):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --------------------------------------------------------------------------------- what is logged
+
+
+def test_a_jira_refusal_is_logged_with_jiras_own_explanation(handler, jira, caplog):
+    jira.fail_next(1, status=400)
+    with caplog.at_level("WARNING", logger="pr-handler"):
+        assert handler.handle(event(action="opened", number=42))[0] == 502
+    message = caplog.records[0].getMessage()
+    assert message.startswith("PR 1000042: Jira failed: HTTP Error 400: Bad Request ")
+    assert "injected 400" in message and "\n" not in message
+
+
+def test_an_unreadable_body_is_logged_but_not_echoed(handler, caplog):
+    with caplog.at_level("WARNING", logger="pr-handler"):
+        assert handler.handle(b"a secret-looking body")[0] == 400
+    assert caplog.records[0].getMessage().startswith("unreadable event, answered 400:")
+    assert "secret-looking" not in caplog.text
+
+
+def test_every_outcome_leaves_one_log_line_naming_the_pull_request(handler, jira, caplog):
+    with caplog.at_level("INFO", logger="pr-handler"):
+        handler.handle(event(action="opened", number=42))
+        handler.handle(event(action="opened", number=42))
+        handler.handle(event(action="closed", number=42, merged=True))
+        handler.handle(event(action="edited", number=42))
+    assert [r.getMessage() for r in caplog.records] == [
+        "PR 1000042 #42: created PROJ-1",
+        "PR 1000042 #42: already_linked PROJ-1",
+        "PR 1000042 #42: moved PROJ-1",
+        "PR 1000042 #42 skipped: nothing to do for edited",
+    ]

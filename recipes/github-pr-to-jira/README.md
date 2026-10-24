@@ -11,8 +11,8 @@ in the wrong order.
 | 3. Core code | done |
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
-| 6. Troubleshooting | next |
-| 7. Customer pack | to do |
+| 6. Troubleshooting | done |
+| 7. Customer pack | next |
 
 ## 1. Problem and architecture
 
@@ -298,7 +298,95 @@ That is the one gap in the design (part 3): the stale-claim takeover would then 
 
 ## 6. Troubleshooting
 
-_To do: symptom, cause, how to check and fix, with real log lines._
+Start with the question "did the event arrive, and what did each step say?" Open the event in the HookScope
+dashboard (`http://localhost:8000`) or read the logs with `make logs RECIPE=github-pr-to-jira`. A
+rejected event shows a **Why did this fail?** panel with the cause and the fix.
+
+A delivery leaves one line from HookScope when it arrives (`event received`), one from the handler
+(`created`, `moved`, `already_linked`, `skipped`, `Jira failed` or `busy`), and one from HookScope when the
+forward finishes (`forward attempt ... status_code=...`). Where the trail stops tells you where to look. The
+`skipped`, `Jira failed`, `busy` and `invalid configuration` lines below were captured from this recipe's own
+setup (the one the tests use); the Jira error texts in the tables are `urllib`'s wording plus the start of
+Jira's own explanation.
+
+### No issue appeared
+
+| What you see | Cause | Check and fix |
+|---|---|---|
+| `PR 1000042 #42 skipped: nothing to do for edited` | The action is not one that changes an issue (`edited`, `synchronize`, labels, reviews) | Working as designed. Only `opened`, `reopened` and a merge act |
+| `skipped: nothing to do for closed (not merged)` | The pull request was closed without merging | Working as designed: people decide whether abandoned work is Done. Move the issue by hand |
+| `already_linked PROJ-1` | This pull request already has an issue | Open `PROJ-1`. Redeliveries and a late `opened` land here by design |
+| `forwarded_to: []` in the `202` answer, and no handler line | No rule matched: the event is not `pull_request`, or the webhook is not subscribed to pull request events | In the GitHub webhook settings tick **Pull requests**; compare the event's type in the dashboard with `event_types` in `rules.json` |
+| `verification=invalid reason=signature mismatch`, answer `401` | The webhook secret in GitHub is not the one HookScope has | Read the panel's fix; set `HOOKSCOPE_SECRET_GITHUB` to the exact secret typed into GitHub, and restart HookScope |
+| `verification=unsigned reason=missing X-Hub-Signature-256 header` | The GitHub webhook has no secret set, or a proxy removed the header | Set a secret in the GitHub webhook settings; check the proxy passes `X-Hub-Signature-256` through |
+| `verification=no_secret` | `HOOKSCOPE_SECRET_GITHUB` is not set | Run `make env`, or set the variable, and restart HookScope |
+| The dashboard shows a dead letter with `HTTP 400` and the handler logged `unreadable event, answered 400` | The body was not a pull request event (a different webhook content type, or a test ping posted to this rule) | In GitHub choose the content type `application/json`; a `400` is never retried, so it is listed as a dead letter for you to look at |
+
+A rejected or unmatched event is never forwarded, so the handler line is missing by design in those rows.
+
+### Jira is failing
+
+```text
+pr-handler WARNING PR 1000044: Jira failed: HTTP Error 503: Service Unavailable
+pr-handler WARNING PR 1000045: Jira failed: HTTP Error 400: Bad Request {"error": "injected 400"}
+pr-handler WARNING PR 1000046: Jira failed: <urlopen error [Errno 111] Connection refused>
+hookscope WARNING forward attempt event_id=3 rule=pull-request attempt=1 status_code=502 elapsed_ms=5 error=None
+```
+
+The handler answers `502` and HookScope retries with backoff, five attempts in all. After that the delivery is a
+**dead letter**: the dashboard lists it with a **Re-send** button, and so does `GET /api/dead-letters`. The
+error text ends with the start of Jira's own explanation, which usually names the field or id it did not accept.
+
+| Cause (usually) | Fix |
+|---|---|
+| `503`, `429` or `Connection refused`: Jira is down or rate limiting | Wait, then re-send the dead letters. Nothing was lost, and a re-sent pull request gets one issue |
+| `401`: the email or API token is wrong or expired | Fix `JIRA_EMAIL` and `JIRA_API_TOKEN`, restart the handler, re-send |
+| `403`: the account may not create issues or move them in this project | Give the account the project permission, then re-send |
+| `404`: the Jira site URL or project key is wrong | Check `JIRA_BASE_URL` and `JIRA_PROJECT` |
+| `400` with a message about the issue type, a field or a transition | `JIRA_ISSUE_TYPE` does not exist in the project, or the project requires a field the handler does not send, or `JIRA_TRANSITION_DONE` is not a transition available from the issue's current status. List the valid transitions with `GET /rest/api/3/issue/<KEY>/transitions` and fix `recipe.env` |
+| `status_code=None error=...` on the HookScope line | HookScope cannot reach the handler at all. Check `docker compose ps`: the handler must be healthy (port 8080, `/healthz`) |
+
+### Two issues for one pull request, or none moved
+
+- **A pull request has two issues.** The one known gap: Jira created the issue, the handler died before it
+  recorded the key, and a minute later the stale claim was taken over (part 3). Find the pair with the label
+  every issue carries: in Jira search `labels = "github-pr-1000042"` (the number is the pull request's id, in
+  the event body as `pull_request.id`; `curl localhost:8000/api/events/<id>` shows it). Close the extra one by
+  hand; the handler's mapping already points at the one it recorded.
+- **The issue stayed To Do after a merge.** Look for the `moved` line for that pull request. No line: the merge
+  event never arrived or did not match (see the first table). `Jira failed` lines: see above, then re-send.
+  A `moved` line but the issue is back in To Do: a person moved it, or the pull request was reopened.
+- **The issue was Done and a repeated `opened` did not reopen it.** Right: only a `reopened` event moves an
+  issue back.
+- **What does the handler think?** The mapping is a small database on the `handler-data` volume. Read it with
+  `docker compose -f docker-compose.base.yml -f recipes/github-pr-to-jira/docker-compose.yml exec handler python -c "import sqlite3; print(sqlite3.connect('/data/pr-issues.db').execute('select pr_id, issue_key, state from prs').fetchall())"`
+  which prints rows like `[(1000042, 'PROJ-1', 'To Do')]` (the query is checked here; the `docker compose`
+  wrapper around it was not run in this environment).
+- **`busy` for a long time.** `PR 1000047: another delivery is creating the issue; ask for a retry` means a
+  claim exists with no issue recorded. Normally it clears in a second. If the same pull request stays busy for
+  more than a minute, the delivery that held the claim died; the next retry or re-send after a minute takes it
+  over.
+
+### The handler will not start
+
+The container prints one line and exits with status 1, naming every setting that is wrong at once:
+
+```text
+invalid configuration: JIRA_BASE_URL is not set; JIRA_EMAIL is not set; JIRA_API_TOKEN is not set; ...
+invalid configuration: JIRA_EMAIL is not set; ...; JIRA_BASE_URL must be an http(s) URL, got 'ftp://x'; JIRA_TRANSITION_DONE must be a whole number, got 'done'
+```
+
+Fix them in `recipe.env` (or the compose file for the Jira URL and credentials). HookScope waits for the
+handler's health check, so a handler that cannot start also keeps `make up` from finishing:
+`docker compose logs handler` shows the line.
+
+### Known limits
+
+- **Losing the volume loses the mapping.** A redelivered old `opened` event would then create a second issue
+  for a pull request that already has one. Back up `handler-data`, or accept a one-off clean-up by label.
+- **One crash window**, described under "Two issues for one pull request" above.
+- **Closing without merging changes nothing**, by decision. If the customer wants abandoned pull requests moved
+  to a "Won't do" status, that is a small change in `wanted_state` and the transitions.
 
 ## 7. Customer pack
 

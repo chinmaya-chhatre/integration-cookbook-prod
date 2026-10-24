@@ -150,6 +150,17 @@ class PullRequests:
 # ------------------------------------------------------------------------------------------- Jira
 
 
+def _explain(exc: OSError) -> str:
+    """The error as one log line; for an HTTP error, the start of Jira's own explanation of it."""
+    detail = ""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            detail = exc.read(300).decode("utf-8", errors="replace")
+        except OSError:
+            pass
+    return f"{exc} {' '.join(detail.split())}".strip()
+
+
 class Jira:
     """The two Jira calls the recipe needs: create an issue, move an issue."""
 
@@ -167,7 +178,7 @@ class Jira:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 raw = response.read()
         except OSError as exc:  # HTTPError and URLError are OSErrors
-            raise JiraError(str(exc)) from exc
+            raise JiraError(_explain(exc)) from exc
         return json.loads(raw) if raw else None
 
     def create_issue(self, summary: str, description: str, labels: list[str]) -> str:
@@ -263,8 +274,9 @@ class Handler:
     def handle(self, body: bytes) -> tuple[int, dict[str, str]]:
         try:
             action, pr = parse_event(body)
-        except ValueError:
+        except ValueError as exc:
             # Retrying the same bytes cannot fix them, so this is a 400, not a 5xx.
+            log.warning("unreadable event, answered 400: %s", exc)
             return 400, {"result": "unreadable"}
         want = wanted_state(action, pr)
         if want is None:
