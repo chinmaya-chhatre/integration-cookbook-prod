@@ -10,8 +10,8 @@ in the wrong order.
 | 2. Config | done (the handler it starts is built in part 3) |
 | 3. Core code | done |
 | 4. Happy-path tests | done |
-| 5. Failure-mode tests | next |
-| 6. Troubleshooting | to do |
+| 5. Failure-mode tests | done |
+| 6. Troubleshooting | next |
 | 7. Customer pack | to do |
 
 ## 1. Problem and architecture
@@ -269,8 +269,32 @@ out-of-order events, a Jira outage and replay are the failure modes, and belong 
 
 ## 5. Failure-mode tests
 
-_To do: duplicates, out-of-order events, Jira 429 and 500, crash between create and record, replay after
-an outage._
+[`tests/test_pr_failures.py`](tests/test_pr_failures.py) uses the same setup as part 4 and scripts what goes
+wrong. Jira's failures come from the mock (`fail_next`, `rate_limit_next`); HookScope's retries follow this
+recipe's `rules.json` (5 attempts), with the backoff wait skipped so the suite stays fast.
+
+| Failure | What the test shows |
+|---|---|
+| GitHub redelivers the same event | Both deliveries are stored and forwarded, one issue exists, and Jira was asked once |
+| Eight deliveries for one pull request at the same moment | Exactly one issue; the others were told to come back (`503`) or found it |
+| The merge arrives before the open | One issue, Done; the late `opened` that follows changes nothing |
+| A late `opened` after a merge | The issue stays Done: only `reopened` moves it back |
+| Jira answers 500 or 429 once | The handler answers 502, HookScope retries, the retry gets through: forward statuses `[502, 200]`, one issue, no dead letter |
+| The move to Done fails once | The issue stays To Do, the retry moves it, and there is still one issue |
+| Jira is down for every attempt | Five 502s, no issue, one dead letter that is marked resendable |
+| Jira comes back, the dead letter is re-sent | The issue is created once, the dead letter clears, and a second click on re-send creates nothing |
+| Jira keeps refusing the request (400) | Five attempts, then a dead letter; nothing is created and nothing is lost |
+| Another delivery died mid-creation | Five `503`s and a dead letter, then, once the claim is a minute old, a re-send creates the issue |
+| A body the handler cannot read | One attempt (`400`, not retried), no Jira request, visible as a dead letter |
+| Actions that need no change | One attempt, answered 200, no Jira request |
+| Forged signature, tampered body | `401` with a diagnosis, stored for debugging, never forwarded, nothing in Jira |
+
+The failure tests cover releasing a claim after a Jira error and preventing older events from
+moving a reopened issue back to the wrong state.
+
+What this part does **not** cover: Jira creating the issue and the handler crashing before it recorded the key.
+That is the one gap in the design (part 3): the stale-claim takeover would then create a second issue, which the
+`github-pr-<id>` label finds. Part 6 says how to look for it.
 
 ## 6. Troubleshooting
 
