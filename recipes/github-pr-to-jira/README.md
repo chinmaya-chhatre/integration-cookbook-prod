@@ -12,7 +12,7 @@ in the wrong order.
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
 | 6. Troubleshooting | done |
-| 7. Customer pack | next |
+| 7. Customer pack | done |
 
 ## 1. Problem and architecture
 
@@ -390,4 +390,70 @@ handler's health check, so a handler that cannot start also keeps `make up` from
 
 ## 7. Customer pack
 
-_To do: FAQ, discovery questions and a go-live checklist._
+What to hand a customer, and what to ask before building it for them. The answers describe this recipe as
+built and tested here; where something is a limit or not built, it says so.
+
+### FAQ
+
+- **Why is "only when the pull request is merged" not a HookScope rule?** A forwarding rule matches on the
+  provider and the event type (`pull_request`), not on values inside the payload such as `action` or `merged`.
+  The decision lives in the small handler, where it is plain code with tests. Routing stays in the receiver;
+  business rules stay in code you can read.
+- **What happens at each step of a pull request's life?** Opening creates one issue (To Do). Merging moves it
+  to Done. Reopening moves a Done issue back to To Do. Edits, new commits, labels and review requests change
+  nothing. Closing without merging changes nothing, by decision: people decide whether abandoned work is Done.
+- **Could one pull request ever get two issues?** Not through repeats, reordering or simultaneous deliveries:
+  the handler claims the pull request's id before it calls Jira, and all of that is tested. There is one
+  narrow gap: if Jira creates the issue and the handler dies before recording its key, a later retry can
+  create a second one. Every issue carries the label `github-pr-<id>`, so a search finds and closes it.
+- **What if Jira is down or rate limiting?** Nothing is lost. The handler answers `502`, HookScope retries
+  five times with backoff, and anything still failing becomes a dead letter that can be re-sent from the
+  dashboard once Jira is back. A re-sent pull request gets one issue.
+- **What if the merge event arrives before the open?** The handler creates the issue and moves it to Done in
+  one go, and a late `opened` afterwards changes nothing.
+- **Where does the handler remember which issue belongs to which pull request?** In a small database on a
+  volume, so a restart keeps it. Losing the volume loses it: back it up, or accept a one-off clean-up by
+  label.
+- **Which Jira statuses does it use?** The transition ids for "To Do" and "Done" in `recipe.env`. They differ
+  per Jira project and workflow, so look yours up (`GET /rest/api/3/issue/<KEY>/transitions`). A workflow that
+  has no direct move to Done from the issue's current status needs a different id, or a handler change.
+- **Does it cover every repository, draft pull requests, forks?** Every pull request that reaches the
+  webhook, whatever its repository, draft status or origin: the handler does not filter. Limiting it to some
+  repositories means a webhook only on those, or a small allow-list in the handler (not built here).
+- **Who is the issue's reporter and assignee?** The Jira account in `JIRA_EMAIL`. The GitHub author is in the
+  description; mapping GitHub users to Jira users is not built here.
+- **Jira Cloud or Server / Data Center?** Written for Jira Cloud's REST API v3 (including its document format
+  for descriptions). Server and Data Center differ in details and were not looked at.
+- **What does this prove about Jira?** Tests run against a mock Jira that answers like the endpoints the
+  recipe uses, including 429 and 5xx. It has not been run against a real Jira site here, so create one real
+  issue in the customer's project before go-live.
+- **Is the webhook secret safe?** HookScope verifies every request with the secret you set in GitHub and
+  rejects anything that fails; the secret and the Jira API token live in environment variables, not in git.
+
+### Discovery questions
+
+- Which repositories or organisation should it cover, and should drafts or forks count?
+- Which Jira project and issue type, and what does the workflow look like: which transition takes an issue to
+  Done from To Do, and are there required fields the handler would have to send?
+- What should a pull request closed without merging do: nothing, or move to a "Won't do" status?
+- Should the issue carry more than a link: assignee, components, labels, a story key from the branch name?
+- Which Jira account acts as the integration, and who rotates its API token?
+- Jira Cloud, or Server / Data Center?
+- How many pull requests a day, and how bursty (a bulk merge, a rebase of many branches)?
+- Where does it run, who is told when deliveries fail (dead letters), and how is the volume backed up?
+- How bad is a stray duplicate issue after a crash: is a clean-up by label acceptable?
+
+### Go-live checklist
+
+- [ ] GitHub webhook created with the content type `application/json`, the **Pull requests** event, and a
+      secret; the same secret in `HOOKSCOPE_SECRET_GITHUB`
+- [ ] Endpoint reachable from GitHub (no proxy rewriting the URL or body); GitHub's "Recent Deliveries" shows
+      `202`
+- [ ] Jira site URL, project key, issue type, and the account's email and API token set; the account can
+      create and transition issues in that project
+- [ ] `JIRA_TRANSITION_TODO` and `JIRA_TRANSITION_DONE` checked against the project's real workflow
+- [ ] One real pull request opened and merged, and its issue seen created and moved
+- [ ] Retry and dead-letter behaviour agreed with the customer (five attempts, then re-send by hand)
+- [ ] Alerting on failed deliveries: someone watches the dead-letter list or `/metrics`
+- [ ] The `handler-data` volume is backed up, and the handler restarts on failure with its `/healthz` monitored
+- [ ] The duplicate-by-label clean-up is known to whoever runs it
