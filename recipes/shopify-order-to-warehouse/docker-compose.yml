@@ -1,0 +1,47 @@
+# Runs the recipe: HookScope (from the repo's docker-compose.base.yml) plus the handler and a mock warehouse.
+#
+#   make env && make up RECIPE=shopify-order-to-warehouse
+#   python -m common.send shopify_order_created total=199.00
+#   curl localhost:9002/v1/orders/820982911946154508     # what the "warehouse" now holds
+#
+# Paths here are relative to the repository root, not to this folder: Compose resolves every
+# file against the first -f file. `make up RECIPE=...` points HookScope at ./rules.json for you.
+services:
+  handler:
+    # Built from handler/ (part 3 of this recipe adds the code and its Dockerfile).
+    build: ./recipes/shopify-order-to-warehouse/handler
+    env_file: ./recipes/shopify-order-to-warehouse/recipe.env
+    environment:
+      # Mock warehouse, on the compose network. The mock ignores the key; for a real warehouse set its
+      # intake URL and the key it issued (keep it out of git).
+      WAREHOUSE_BASE_URL: http://warehouse:9000
+      WAREHOUSE_API_KEY: demo-key-not-a-real-credential
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hookscope:
+    # HookScope forwards to the handler after the handler is up, so a retry is never wasted on boot.
+    depends_on:
+      handler:
+        condition: service_healthy
+
+  warehouse:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./common:/app/common:ro
+    command: ["python", "-m", "common.mocks", "warehouse", "--port", "9000"]
+    ports:
+      - "${WAREHOUSE_MOCK_PORT:-9002}:9000"
+    healthcheck:
+      # Any answer, even the mock's 404 for an unknown order, proves the server is up.
+      test: ["CMD", "python", "-c", "import urllib.request, urllib.error\ntry:\n    urllib.request.urlopen('http://localhost:9000/v1/orders/none')\nexcept urllib.error.HTTPError:\n    pass"]
+      interval: 3s
+      timeout: 3s
+      retries: 10

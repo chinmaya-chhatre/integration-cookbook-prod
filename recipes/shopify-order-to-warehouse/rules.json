@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {
+      "name": "order-created",
+      "source": "shopify",
+      "event_types": ["orders/create"],
+      "target_url": "http://handler:8080/shopify/order-created",
+      "retry": {"attempts": 6, "backoff_seconds": 5, "max_backoff_seconds": 300}
+    }
+  ]
+}

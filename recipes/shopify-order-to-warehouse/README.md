@@ -6,8 +6,8 @@ outage a delay instead of a pile of lost orders.
 | Part | Status |
 |---|---|
 | 1. Problem and architecture | done |
-| 2. Config | next |
-| 3. Core code | to do |
+| 2. Config | done (the handler it starts is built in part 3) |
+| 3. Core code | next |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
@@ -132,7 +132,62 @@ parcel. The sample event used by the tests is built by `common/fixtures.py`: `sh
 
 ## 2. Config
 
-_To do: rules, compose file and settings._
+Three files describe the setup; nothing here is code.
+
+| File | What it does |
+|---|---|
+| [`rules.json`](rules.json) | HookScope's forwarding rule: events from `shopify` of type `orders/create` go to the handler, with up to 6 attempts and exponential backoff from 5 s to 5 min |
+| [`docker-compose.yml`](docker-compose.yml) | Adds the handler and a mock warehouse to HookScope (from the repository's base compose file) and makes HookScope wait for the handler to be healthy |
+| [`recipe.env`](recipe.env) | The handler's settings: which financial states are sent, and the warehouse timeout |
+
+### The rule
+
+```json
+{
+  "name": "order-created",
+  "source": "shopify",
+  "event_types": ["orders/create"],
+  "target_url": "http://handler:8080/shopify/order-created",
+  "retry": {"attempts": 6, "backoff_seconds": 5, "max_backoff_seconds": 300}
+}
+```
+
+- `source` and `event_types` keep every other provider, and every other Shopify topic (`orders/updated`,
+  `products/update`, ...), away from the handler. For Shopify the event type is the `X-Shopify-Topic`
+  header, so `orders/create` is matched there; whether the order is paid is the handler's business (part 1).
+- The retry policy is longer than the other recipes' because a warehouse outage is measured in minutes, not
+  seconds: HookScope waits 5, 10, 20, 40 and 80 seconds between the six attempts (longer if the target sends
+  `Retry-After`), about two and a half minutes in all. A longer outage ends as a dead letter that can be
+  re-sent from the dashboard, which is the intended way to recover from an outage that long.
+- Only events whose signature verified are forwarded; a forged request is stored and never reaches the handler.
+
+### Settings
+
+| Setting | Where | Meaning |
+|---|---|---|
+| `HOOKSCOPE_SECRET_SHOPIFY` | `.env`, written by `make env` | The secret HookScope verifies `X-Shopify-Hmac-Sha256` with. The demo value comes from `common/fixtures.py`; in production it is the signing secret of your Shopify app or webhook |
+| `WAREHOUSE_BASE_URL` | `docker-compose.yml` | Where the handler sends orders (`POST /v1/orders`). It points at the mock warehouse; put the real intake URL here to try it for real |
+| `WAREHOUSE_API_KEY` | `docker-compose.yml` | The credential the warehouse issued. The mock ignores it and the value here is a placeholder; a real one belongs in your secret store, not in git |
+| `FULFIL_FINANCIAL_STATUSES` | `recipe.env` | The Shopify `financial_status` values that are sent, comma separated (`paid`). Everything else is acknowledged and skipped |
+| `WAREHOUSE_TIMEOUT_SECONDS` | `recipe.env` | How long the handler waits for the warehouse before asking HookScope to retry |
+
+### Run it
+
+```bash
+make env                                              # write .env with the demo secrets
+make up RECIPE=shopify-order-to-warehouse             # HookScope, the handler and a mock warehouse
+python -m common.send shopify_order_created total=199.00
+curl localhost:9002/v1/orders/820982911946154508      # what the "warehouse" now holds
+make down RECIPE=shopify-order-to-warehouse
+```
+
+`common.send` signs a realistic `orders/create` event the way Shopify does and posts it to HookScope, so the
+whole path runs: verification, the rule, the handler, the warehouse. Until part 3 adds the handler, `make up`
+stops at building it; both compose files validate (`make config`) and the rule and compose checks in
+`tests/test_recipe_configs.py` run on this recipe in the meantime.
+
+Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
+this recipe's compose file start with `./recipes/shopify-order-to-warehouse/`.
 
 ## 3. Core code
 
