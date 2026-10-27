@@ -34,7 +34,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 |---|---|---|
 | R1 | [**stripe-invoice-paid-to-slack**](recipes/stripe-invoice-paid-to-slack) | Tell finance about paid invoices above a threshold, in a readable message |
 | R2 | [**github-pr-to-jira**](recipes/github-pr-to-jira) | Create and transition Jira issues from pull request events, once per PR |
-| R3 | **shopify-order-to-warehouse** | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
+| R3 | [**shopify-order-to-warehouse**](recipes/shopify-order-to-warehouse) *(in progress)* | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
 | R4 | **stripe-subscription-lifecycle-to-crm** | Keep a CRM correct when subscription events arrive out of order or twice |
 | R5 | **twilio-sms-to-support-ticket** | Turn inbound SMS into tickets, including the proxy and URL signature pitfall |
 | R6 | **webhook-to-queue-on-aws** | Acknowledge fast, process later: HookScope, SQS and a worker, with Terraform |
