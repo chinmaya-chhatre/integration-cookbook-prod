@@ -19,8 +19,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 >
 > Finished recipes: [stripe-invoice-paid-to-slack](recipes/stripe-invoice-paid-to-slack) and [github-pr-to-jira](recipes/github-pr-to-jira): all seven parts each, with end-to-end tests that run HookScope in-process.
 >
-> Try it: `pip install -r requirements-dev.txt`, then `make test` (or `make test RECIPE=<name>`), `make check` for
-> lint plus tests (what CI runs: lint, Markdown link and diagram checks, tests on Python 3.11 and 3.12, the compose files, and one job per recipe), and `make up` to start HookScope with Docker (`make help` lists everything).
+> **Try it.** Install the development dependencies with `pip install -r requirements-dev.txt`. Run `make check` for lint, documentation checks, and tests, or `make test RECIPE=<name>` to test one recipe. Run `make config` to validate the Docker Compose files and `make up` to start HookScope locally. Use `make help` to see all targets.
 
 ## Who it is for
 
