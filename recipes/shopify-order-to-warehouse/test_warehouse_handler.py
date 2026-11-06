@@ -4,9 +4,10 @@ from threading import Thread
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from handler.app import Handler, Settings, make_server
+
 from common.fixtures import shopify_order_created
 from common.mocks.warehouse import WarehouseMock
-from handler.app import Handler, Settings, make_server
 
 
 class WarehouseHandlerTest(unittest.TestCase):
