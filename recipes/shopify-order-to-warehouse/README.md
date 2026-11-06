@@ -6,8 +6,8 @@ outage a delay instead of a pile of lost orders.
 | Part | Status |
 |---|---|
 | 1. Problem and architecture | done |
-| 2. Config | done (the handler it starts is built in part 3) |
-| 3. Core code | next |
+| 2. Config | done |
+| 3. Core code | done |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
@@ -182,16 +182,16 @@ make down RECIPE=shopify-order-to-warehouse
 ```
 
 `common.send` signs a realistic `orders/create` event the way Shopify does and posts it to HookScope, so the
-whole path runs: verification, the rule, the handler, the warehouse. Until part 3 adds the handler, `make up`
-stops at building it; both compose files validate (`make config`) and the rule and compose checks in
-`tests/test_recipe_configs.py` run on this recipe in the meantime.
+whole path runs: verification, the rule, the handler, the warehouse.
 
 Compose resolves every relative path against the repository root (the first `-f` file), so the paths in
 this recipe's compose file start with `./recipes/shopify-order-to-warehouse/`.
 
 ## 3. Core code
 
-_To do: the handler, in small typed functions._
+The [handler](handler/app.py) receives the original order JSON from HookScope, filters on the configured
+financial statuses and sends the mapped order to `POST /v1/orders`. It sends the configured warehouse key
+as a bearer credential. The warehouse owns deduplication by order ID, so the handler stores no local state.
 
 ## 4. Happy-path tests
 
