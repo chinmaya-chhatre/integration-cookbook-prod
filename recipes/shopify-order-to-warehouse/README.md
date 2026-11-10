@@ -8,9 +8,9 @@ outage a delay instead of a pile of lost orders.
 | 1. Problem and architecture | done |
 | 2. Config | done |
 | 3. Core code | done |
-| 4. Happy-path tests | to do |
-| 5. Failure-mode tests | to do |
-| 6. Troubleshooting | to do |
+| 4. Happy-path tests | done |
+| 5. Failure-mode tests | done |
+| 6. Troubleshooting | done |
 | 7. Customer pack | to do |
 
 ## 1. Problem and architecture
@@ -156,8 +156,9 @@ Three files describe the setup; nothing here is code.
   `products/update`, ...), away from the handler. For Shopify the event type is the `X-Shopify-Topic`
   header, so `orders/create` is matched there; whether the order is paid is the handler's business (part 1).
 - The retry policy is longer than the other recipes' because a warehouse outage is measured in minutes, not
-  seconds: HookScope waits 5, 10, 20, 40 and 80 seconds between the six attempts (longer if the target sends
-  `Retry-After`), about two and a half minutes in all. A longer outage ends as a dead letter that can be
+  seconds: HookScope waits 5, 10, 20, 40 and 80 seconds between the six attempts, about two and a half
+  minutes plus request durations. The handler does not pass the warehouse's `Retry-After` header through.
+  A longer outage ends as a dead letter that can be
   re-sent from the dashboard, which is the intended way to recover from an outage that long.
 - Only events whose signature verified are forwarded; a forged request is stored and never reaches the handler.
 
@@ -195,15 +196,125 @@ as a bearer credential. The warehouse owns deduplication by order ID, so the han
 
 ## 4. Happy-path tests
 
-_To do: signed `orders/create` fixtures through HookScope to the handler and the warehouse._
+[`test_shopify_happy_path.py`](test_shopify_happy_path.py) sends a signed `orders/create` fixture
+through HookScope, the HTTP handler and the mock warehouse. It checks verification, the forwarding
+result, the exact order ID and the mapped lines and address.
 
 ## 5. Failure-mode tests
 
-_To do: duplicates, unpaid orders, a line without a SKU, warehouse 429 and 500, an outage and replay._
+[`test_shopify_failures.py`](test_shopify_failures.py) covers transient warehouse 429/500 responses,
+duplicate deliveries, distinct orders arriving out of creation order, a late unpaid delivery, exhausted
+retries and repeated manual resend after recovery. [`test_warehouse_handler.py`](test_warehouse_handler.py)
+also checks invalid lines and warehouse response mapping. Run these with HookScope source on
+`PYTHONPATH` and its dependencies installed; otherwise the end-to-end tests skip:
+
+```bash
+make test RECIPE=shopify-order-to-warehouse
+```
 
 ## 6. Troubleshooting
 
-_To do: symptom, cause, how to check and fix, with real log lines._
+### Start with the stored event
+
+A `202` acknowledges receipt by HookScope; it does not prove that the warehouse accepted the order.
+Use the stored event ID to connect verification, forwarding attempts and any dead letter. The Shopify
+order ID and HookScope event ID are different identifiers.
+
+Run from the repository root while the recipe is up. These commands use the demo's default port and
+unauthenticated local configuration. For a secured deployment, use its configured authentication and URL.
+
+```bash
+curl -sS 'http://localhost:8000/api/events?source=shopify&limit=20'
+# Replace 1 with the HookScope event ID returned above.
+curl -sS http://localhost:8000/api/events/1
+curl -sS http://localhost:8000/api/events/1/forwards
+curl -sS http://localhost:8000/api/dead-letters
+curl -sS http://localhost:8000/metrics
+make logs RECIPE=shopify-order-to-warehouse
+```
+
+### Symptoms, checks and fixes
+
+| Symptom | Likely cause | How to check | Fix |
+|---|---|---|---|
+| No stored event | Wrong webhook URL or receiver unavailable | Check Shopify's delivery result, receiver health and request logs | Point Shopify at the reachable `/hooks/shopify` endpoint; restore receiver connectivity |
+| Event stored but verification is invalid | Wrong signing secret or altered body bytes | Inspect the event's verification result and Shopify signature header | Configure the app/webhook signing secret; preserve the exact signed bytes through proxies; do not bypass verification |
+| Valid event has no forwards | Topic or loaded rules do not match | Compare `X-Shopify-Topic` with `orders/create`; inspect `/api/rules` for `order-created` | Load this recipe's rules and restart/recreate HookScope after changing its configuration |
+| Forward is 200 but no warehouse order | Financial status was deliberately skipped | Check the original `financial_status` and handler skip log | Confirm the fulfilment policy; this recipe listens to `orders/create`, so a later payment does not automatically produce another matching event |
+| Forward is 422 | Missing SKU, invalid quantity/address or warehouse schema rejection | Inspect the stored body and handler response; check warehouse validation details at the target | Correct the source data or mapping before a new delivery; resending the unchanged stored body cannot repair bad input |
+| Attempts show 502 | Warehouse 429/5xx, timeout, DNS/connectivity problem or another unexpected warehouse status | Read handler logs for the upstream status or request failure; check the warehouse URL and service health | Restore connectivity/capacity or correct the endpoint/credential; then resend a dead letter after recovery |
+| Six failed attempts and a dead letter | Outage lasted beyond the configured retry window | Inspect attempts 1 through 6 and the dead letter's `resendable` field | Resolve the target failure, then use the single-forward resend below |
+| Repeated delivery is 200 and the order count stays one | Warehouse answered 409 for the same order ID | Check the order at the warehouse and forwarding history | Expected duplicate handling; verify the real warehouse's 409 contract before relying on it |
+| A corrected order does not replace the existing warehouse order | This intake treats an existing order ID as already received | Compare the stored order with the new payload | Use the warehouse's amendment workflow; this recipe does not implement order updates or cancellations |
+
+The handler maps warehouse 429 to 502 and does not propagate its `Retry-After` header. HookScope uses
+the recipe's own backoff: 5, 10, 20, 40 and 80 seconds between six attempts, plus request durations.
+A permanent 422 receives no automatic retry and can also appear in the dead-letter list.
+
+### Observed outage logs and metrics
+
+The following excerpts were captured from a local run with the same signed fixture, handler and pinned
+HookScope source used by the integration tests. The mock warehouse returned 500 six times. Backoff
+sleeping was disabled in the test; production waits according to the rule. Timestamp and request-ID
+prefixes are omitted from HookScope log lines here:
+
+```text
+event received event_id=1 source=shopify verification=valid reason=None cause=None delivery_id=None bytes=415
+order 820982911946154508: warehouse returned 500
+forward attempt event_id=1 rule=order-created attempt=1 status_code=502 elapsed_ms=31 error=None
+forward attempt event_id=1 rule=order-created attempt=6 status_code=502 elapsed_ms=15 error=None
+```
+
+The handler line identifies the upstream 500; the forwarding record reports the handler's 502. For a
+network failure the handler instead logs `order <id>: warehouse request failed`. A skipped financial
+status logs `order <id> skipped: financial status is not configured for fulfilment` at INFO level.
+
+Selected `/metrics` samples after the six failures:
+
+```text
+hookscope_deliveries_total{source="shopify",verification="valid"} 1
+hookscope_forward_attempts_total{rule="order-created",outcome="failure"} 6
+hookscope_dead_letters 1
+```
+
+Delivery counts measure received webhooks; forward counts include retry attempts. Neither is a count
+of unique fulfilled orders. The dead-letter gauge includes all rules, so inspect `/api/dead-letters`
+to identify this recipe's failures. Watch for a rising failure count or a nonzero dead-letter gauge;
+check the warehouse itself to confirm fulfilment.
+
+### Recover without creating a second shipment
+
+1. Confirm the warehouse is healthy and that order-ID deduplication still works. Check whether it
+   accepted the order even if the original response was lost.
+2. Inspect the event, its attempts and the `order-created` dead letter. Resolve data/configuration
+   errors first. A stored payload remains unchanged when it is resent.
+3. Resend only the affected forward, substituting its HookScope event ID:
+
+```bash
+curl -sS -X POST http://localhost:8000/api/events/1/forwards/order-created/resend
+curl -sS http://localhost:8000/api/events/1/forwards
+curl -sS http://localhost:8000/api/dead-letters
+curl -sS http://localhost:9002/v1/orders/820982911946154508
+```
+
+The resend endpoint's HTTP 200 means the request to the target completed; inspect the JSON
+`status_code` and `ok` too. In the captured recovery, these were `200` and `true`, with
+`response_body` equal to `{"result": "sent"}` and `attempt` equal to `7`. A second resend succeeded
+without adding an order because the warehouse's 409 became `already_received`.
+
+After the successful resend, the failure counter remained 6, a success sample appeared and the
+dead-letter gauge cleared:
+
+```text
+hookscope_forward_attempts_total{rule="order-created",outcome="failure"} 6
+hookscope_forward_attempts_total{rule="order-created",outcome="success"} 1
+hookscope_dead_letters 0
+```
+
+Use the forwarding resend endpoint rather than replaying the payload directly to the warehouse:
+the handler must still apply filtering, schema mapping and duplicate response handling. Keep the
+event store while investigating. `make down` includes `-v` and deletes the demo data volume, so it
+is unsuitable for preserving pending events during recovery.
 
 ## 7. Customer pack
 
