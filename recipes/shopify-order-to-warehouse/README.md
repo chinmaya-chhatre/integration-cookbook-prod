@@ -11,7 +11,7 @@ outage a delay instead of a pile of lost orders.
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
 | 6. Troubleshooting | done |
-| 7. Customer pack | to do |
+| 7. Customer pack | done |
 
 ## 1. Problem and architecture
 
@@ -318,4 +318,114 @@ is unsuitable for preserving pending events during recovery.
 
 ## 7. Customer pack
 
-_To do: FAQ, discovery questions and a go-live checklist._
+### FAQ
+
+**What is included?** A verified `orders/create` webhook, a paid-order filter, conversion to the
+warehouse intake schema, retryable delivery, dead-letter inspection and manual resend. The warehouse
+is a mock. Completion of this recipe means the example and its tests are complete, not that a customer
+deployment has been validated against a real Shopify shop or warehouse.
+
+**When is an order sent?** Only when its `financial_status` is in `FULFIL_FINANCIAL_STATUSES`, which
+defaults to `paid`. An unpaid creation event is skipped successfully. A later payment is outside this
+recipe's subscribed topic. Supporting pay-later orders requires agreeing a payment event and validating
+its payload and mapping before changing the subscription and forwarding rule.
+
+**Does this guarantee exactly one shipment?** The handler relies on the warehouse atomically rejecting
+an existing `order_id` with 409. Repeats and manual resends then return success without creating another
+order. Confirm that contract, its concurrency behaviour and its retention period with the real target.
+If 409 also means another kind of conflict, the response mapping must be changed before use. The recipe
+does not control the warehouse's physical shipment process or provide an end-to-end exactly-once guarantee.
+
+**What happens if the warehouse accepts an order but its response is lost?** HookScope can retry the
+delivery. A warehouse that retains and enforces the order ID should answer 409 on that retry. Verify
+this ambiguous-response scenario against the customer's target before go-live.
+
+**What happens during an outage?** Warehouse 429/5xx and connection failures become handler 502
+responses. HookScope tries up to six times, then retains a dead letter for manual resend. The wait
+intervals total 155 seconds plus request durations; the warehouse's `Retry-After` is not propagated.
+Recovery depends on preserving HookScope's event store and acting before retained data is deleted.
+
+**Can we fix bad input by clicking resend?** No. Missing SKUs, invalid quantities and warehouse 422
+responses need investigation. Resend uses the original stored body. Correct the source data or mapping
+and arrange an appropriate corrected delivery; do not expect replay to fetch the latest Shopify order.
+
+**What about changes, cancellations and older events?** Different orders can arrive in any creation
+order. A late unpaid event is skipped. An existing warehouse order is not overwritten by another
+creation event. Updates, cancellations, refunds, inventory reservation, partial fulfilment and historical
+backfill are outside this recipe and need separate business rules.
+
+**Can it serve multiple shops?** Not safely as a shared deployment without additional design. The
+handler sends a single order ID as the warehouse key and has no shop allow-list or shop-specific routing.
+Agree shop isolation and an order-key namespace before combining shops or other order sources.
+
+**Which customer data travels or remains stored?** The warehouse receives the order reference, lines
+and shipping address. Email, phone and prices are not included in that mapped request. HookScope still
+stores the original webhook, which can contain those fields. Set access controls, storage protection,
+retention and deletion procedures for the original payload and logs as well as the target system.
+
+**Where do credentials and trust boundaries sit?** HookScope verifies the Shopify signature. The
+handler expects trusted forwarding from HookScope and does not independently verify that signature or
+authenticate its caller. Keep the handler on a private network. Replace demo secrets and the warehouse
+demo key, use a secret store and restrict dashboard/API access. Configure HTTPS at the public boundary
+and for a real warehouse endpoint; this local demo uses HTTP.
+
+### Discovery questions
+
+| Area | Questions to settle with the customer | Decision to record |
+|---|---|---|
+| Order eligibility | Which shops, sales channels and financial states qualify? Are pay-later, manual and partially paid orders in scope? | Shop boundary, subscribed topic and fulfilment policy |
+| Target contract | Which intake endpoint and authentication are required? Are SKU, address and quantity rules compatible? | Validated schema and field mapping, including address requirements |
+| Duplicate safety | Is order ID unique across sources? Is creation atomic? Does 409 always mean already accepted? How long are IDs retained? | Idempotency key, conflict semantics and response-loss procedure |
+| Order lifecycle | Who handles amendments, cancellations, refunds and an order paid after creation? | Explicit scope and separate workflows for unsupported events |
+| Failures and volume | What are normal/peak rates, warehouse limits, outage lengths and acceptable delivery delay? | Capacity evidence, retry budget and escalation threshold |
+| Recovery | Who owns dead letters, source corrections and replay? What is the cutoff before data retention removes an event? | Named owner, response time and recovery procedure |
+| Security and privacy | Who rotates secrets? Who can inspect payloads or resend? How are addresses and full webhooks retained and deleted? | Access, network, encryption and retention controls |
+| Acceptance and cutover | Which real-shop/warehouse test environment is available? Is manual import still running? | Acceptance evidence, cutover window and reconciliation owner |
+
+### Go-live checklist
+
+Treat these as customer deployment gates. They are intentionally unchecked; local mock tests do not
+complete them. Capture evidence and an owner for each item in the customer's handover record.
+
+**Contract and scope**
+
+- [ ] Confirm the shop/source boundary, order-ID namespace, eligible financial states and subscribed topic.
+- [ ] Validate the mapped schema against the actual warehouse, including SKU rules, quantities and addresses.
+- [ ] Verify that repeated and concurrent submissions of one ID create one target order and that 409 has
+      the expected meaning. Exercise an accepted order whose response is lost, then retry it.
+- [ ] Agree how unsupported updates, cancellations, later payments and backfill are handled operationally.
+
+**Deployment and access**
+
+- [ ] Configure the Shopify webhook endpoint and signing secret; confirm signature verification for a real
+      authorized delivery. Confirm that an invalid signature never reaches the handler.
+- [ ] Set the real warehouse URL, credential, allowed financial states and timeout; remove demo values.
+- [ ] Protect the public receiver with HTTPS, restrict dashboard/API access, and keep the handler reachable
+      only by trusted services. Confirm the warehouse transport and credential-rotation procedure.
+- [ ] Persist and back up the event store; test restoration and confirm retention covers the recovery window.
+      Do not use `make down` to preserve data: it removes volumes.
+- [ ] Agree access and deletion controls for stored full webhooks, shipping addresses, backups and logs.
+
+**Acceptance evidence**
+
+- [ ] Send one eligible real test order and reconcile its exact ID, line quantities and address at the target.
+- [ ] Verify unpaid skip behaviour and duplicate delivery without an extra warehouse order.
+- [ ] Exercise 429/500, timeout, permanent validation failure, exhausted retries and recovery in an approved
+      test environment. Confirm the recorded attempts and dead-letter result match the agreed contract.
+- [ ] Resend one failed order after recovery, inspect the resend JSON as well as its HTTP status, and verify
+      the warehouse record and cleared dead letter. Repeat resend to confirm duplicate safety.
+- [ ] Measure peak-load delivery time and rate-limit behaviour against the customer's acceptance target.
+
+**Handover and cutover**
+
+- [ ] Assign an operator and escalation contact for dead letters and validation errors; configure alerts
+      using the metrics in [Troubleshooting](#6-troubleshooting) and confirm someone receives them.
+- [ ] Record the deployment version, configuration, secret owners and backup/restore instructions.
+- [ ] Coordinate manual-import shutdown to avoid overlapping order sources, then reconcile a bounded
+      cutover set between Shopify and the warehouse.
+- [ ] Agree a stop procedure: disable the upstream subscription/forwarding as appropriate, retain pending
+      events, reconcile orders already accepted and resume only after the duplicate contract is verified.
+      Disabling a subscription alone does not cancel forwards already running.
+
+Handover includes this README, the rule and environment configuration, the test results and the
+customer's completed acceptance record. Keep credentials and customer order data out of repository files.

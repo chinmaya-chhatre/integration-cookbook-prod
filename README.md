@@ -17,7 +17,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 > providers' published test vectors, and `common/mocks/`, Jira-, CRM- and warehouse-style mock
 > servers that can be told to answer 500, 429 or slowly.
 >
-> Finished recipes: [stripe-invoice-paid-to-slack](recipes/stripe-invoice-paid-to-slack) and [github-pr-to-jira](recipes/github-pr-to-jira): all seven parts each, with end-to-end tests that run HookScope in-process.
+> Finished recipes: [stripe-invoice-paid-to-slack](recipes/stripe-invoice-paid-to-slack), [github-pr-to-jira](recipes/github-pr-to-jira) and [shopify-order-to-warehouse](recipes/shopify-order-to-warehouse): all seven parts each, with end-to-end tests that run HookScope in-process.
 >
 > **Try it.** Install the development dependencies with `pip install -r requirements-dev.txt`. Run `make check` for lint, documentation checks, and tests, or `make test RECIPE=<name>` to test one recipe. Run `make config` to validate the Docker Compose files and `make up` to start HookScope locally. `make down` stops the local stack and removes its Docker Compose volumes, including stored webhook data. Use `make help` to see all targets.
 
@@ -33,7 +33,7 @@ receiver that verifies signatures, retries deliveries and lets you replay events
 |---|---|---|
 | R1 | [**stripe-invoice-paid-to-slack**](recipes/stripe-invoice-paid-to-slack) | Tell finance about paid invoices above a threshold, in a readable message |
 | R2 | [**github-pr-to-jira**](recipes/github-pr-to-jira) | Create and transition Jira issues from pull request events, once per PR |
-| R3 | [**shopify-order-to-warehouse**](recipes/shopify-order-to-warehouse) *(in progress)* | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
+| R3 | [**shopify-order-to-warehouse**](recipes/shopify-order-to-warehouse) | Reshape orders into a warehouse schema; survive an outage and replay afterwards |
 | R4 | **stripe-subscription-lifecycle-to-crm** | Keep a CRM correct when subscription events arrive out of order or twice |
 | R5 | **twilio-sms-to-support-ticket** | Turn inbound SMS into tickets, including the proxy and URL signature pitfall |
 | R6 | **webhook-to-queue-on-aws** | Acknowledge fast, process later: HookScope, SQS and a worker, with Terraform |
