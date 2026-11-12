@@ -7,7 +7,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 |---|---|
 | 1. Problem and architecture | done |
 | 2. Config | done |
-| 3. Core code | to do |
+| 3. Core code | done |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
@@ -129,14 +129,33 @@ curl -sS http://localhost:9003/subscriptions/sub_demo
 ```
 
 The GET returns 404 until a subscription is sent. A signed subscription fixture and end-to-end demo
-arrive with the happy-path test part. The config commit precedes the core handler, so it alone is not
-a runnable stack. The handler is not exposed on a host port. Do not use `make down` when preserving
+arrive with the happy-path test part. The core handler now supplies the application entry point.
+The handler is not exposed on a host port. Do not use `make down` when preserving
 recovery data: it removes volumes. With no Docker CLI available locally, configuration is checked by
 the repository's YAML/routing tests; actual Compose validation and container startup remain CI/deployment checks.
 
 ## 3. Core code
 
-To do: validated snapshot mapping, a durable state machine and a versioned CRM client.
+[`handler/app.py`](handler/app.py) uses only Python's standard library. `snapshot` validates full
+subscription events and maps status to CRM stage. `decision` applies ordering, duplicate and terminal
+policy. `Handler` serializes updates with a SQLite write transaction, checks the CRM, sends its upsert,
+then records success locally. CRM GET responses must include `id`, `version`, `event_id` and `status`.
+
+`GET /healthz` checks process liveness, not CRM/disk readiness. `POST /stripe/subscription` accepts a
+forwarded JSON body up to 1 MB. It returns 200 for applied/skipped/duplicate/stale/terminal events,
+400 for unreadable JSON, 422 for invalid input or timestamp ambiguity, and 502 for temporary CRM/storage
+failure. Unknown conflicts stay retryable rather than becoming silent success. Redirects are refused
+so bearer credentials cannot travel to a redirected host.
+
+[`test_subscription_core.py`](test_subscription_core.py) checks lifecycle changes, persistence across
+handler restart, duplicate/stale/colliding timestamps, remote acceptance before local commit, 429/500
+write recovery, shared-database concurrency, input validation and the actual HTTP endpoint. These core
+tests do not replace the signed HookScope happy-path and full outage/replay tests in parts 4 and 5.
+
+SQLite serializes CRM calls and limits throughput. Use one process or instances sharing a supported
+local SQLite file, not separate databases or a network filesystem. The CRM mock is single-process test
+infrastructure; its version check does not establish a vendor's concurrency guarantee. Validate the
+real target's contract and size the timeout/serialization budget before production use.
 
 ## 4. Happy-path tests
 
