@@ -6,7 +6,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 | Part | Status |
 |---|---|
 | 1. Problem and architecture | done |
-| 2. Config | to do |
+| 2. Config | done |
 | 3. Core code | to do |
 | 4. Happy-path tests | to do |
 | 5. Failure-mode tests | to do |
@@ -106,7 +106,33 @@ Protect receiver administration, isolate the handler and replace demo credential
 
 ## 2. Config
 
-To do: forwarding rules, environment settings and a Compose stack with durable handler state.
+[`rules.json`](rules.json) routes only the three subscription lifecycle topics to the handler.
+Failures retry up to five times, with 2, 4, 8 and 16 seconds of backoff between attempts.
+[`docker-compose.yml`](docker-compose.yml) extends the base receiver with a handler and the CRM mock.
+The `subscription-state` volume holds the handler's SQLite database. The mock CRM itself is in memory;
+restarting it loses its records. A real target needs its own persistence and backup policy.
+
+| Setting | Purpose |
+|---|---|
+| `HOOKSCOPE_SECRET_STRIPE` | Receiver signing secret, supplied by `.env`; `make env` writes demo values |
+| `CRM_BASE_URL` | CRM base URL, defaulting to the Compose mock for this example |
+| `CRM_API_KEY` | Bearer key; the mock ignores its demo value |
+| `CRM_TIMEOUT_SECONDS` | Per-request timeout, default 5 seconds |
+| `STATE_DB_PATH` | Durable SQLite path, `/data/subscriptions.db` in Compose |
+| `LOG_LEVEL` | Handler log level |
+
+After the core handler is present, run from the repository root:
+
+```bash
+make up RECIPE=stripe-subscription-lifecycle-to-crm
+curl -sS http://localhost:9003/subscriptions/sub_demo
+```
+
+The GET returns 404 until a subscription is sent. A signed subscription fixture and end-to-end demo
+arrive with the happy-path test part. The config commit precedes the core handler, so it alone is not
+a runnable stack. The handler is not exposed on a host port. Do not use `make down` when preserving
+recovery data: it removes volumes. With no Docker CLI available locally, configuration is checked by
+the repository's YAML/routing tests; actual Compose validation and container startup remain CI/deployment checks.
 
 ## 3. Core code
 

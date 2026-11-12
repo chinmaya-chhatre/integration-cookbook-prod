@@ -1,0 +1,40 @@
+# Paths resolve from the repository root, where docker-compose.base.yml lives.
+services:
+  handler:
+    build: ./recipes/stripe-subscription-lifecycle-to-crm/handler
+    env_file: ./recipes/stripe-subscription-lifecycle-to-crm/recipe.env
+    environment:
+      CRM_BASE_URL: http://crm:9000
+      CRM_API_KEY: demo-key-not-a-real-credential
+    volumes:
+      - subscription-state:/data
+    depends_on:
+      crm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hookscope:
+    depends_on:
+      handler:
+        condition: service_healthy
+
+  crm:
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./common:/app/common:ro
+    command: ["python", "-m", "common.mocks", "crm", "--port", "9000"]
+    ports:
+      - "${CRM_MOCK_PORT:-9003}:9000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, urllib.error\ntry:\n    urllib.request.urlopen('http://localhost:9000/subscriptions/none')\nexcept urllib.error.HTTPError as e:\n    assert e.code == 404"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  subscription-state:

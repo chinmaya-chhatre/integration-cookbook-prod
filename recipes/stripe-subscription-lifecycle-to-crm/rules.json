@@ -1,0 +1,15 @@
+{
+  "rules": [
+    {
+      "name": "subscription-lifecycle",
+      "source": "stripe",
+      "event_types": [
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted"
+      ],
+      "target_url": "http://handler:8080/stripe/subscription",
+      "retry": {"attempts": 5, "backoff_seconds": 2, "max_backoff_seconds": 30}
+    }
+  ]
+}
