@@ -9,7 +9,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 | 2. Config | done |
 | 3. Core code | done |
 | 4. Happy-path tests | done |
-| 5. Failure-mode tests | to do |
+| 5. Failure-mode tests | done |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
 
@@ -185,11 +185,40 @@ make test RECIPE=stripe-subscription-lifecycle-to-crm
 
 Integration tests skip if HookScope is unavailable, so check the test summary rather than treating a
 skipped run as validation. These tests use illustrative signed fixtures and a mock CRM, not live Stripe
-or a vendor CRM. Full failure/replay coverage remains part 5, and `.wip` stays until all seven parts finish.
+or a vendor CRM. Failure/replay scenarios are covered below; `.wip` stays until all seven parts finish.
 
 ## 5. Failure-mode tests
 
-To do: duplicates, reordering, timestamp collisions, target failures and replay after recovery.
+[`test_subscription_failures.py`](test_subscription_failures.py) uses the same stack as the happy-path
+tests, shared through `conftest.py`: signed snapshots, HookScope with this recipe's retry rule, the
+actual HTTP handler, SQLite state and the CRM mock. Only backoff sleeping is disabled; attempt limits,
+recorded outcomes and dead-letter decisions remain the configured behaviour.
+
+| Failure scenario | Asserted outcome |
+|---|---|
+| Duplicate delivery and manual resend | Each is acknowledged, but the CRM receives one upsert |
+| Older creation after a newer update | Older snapshot cannot regress the CRM's active state |
+| Active snapshot after cancellation | Terminal subscription remains canceled |
+| CRM GET or PUT returns 429/500 once | HookScope records 502 then 200; a failed write does not advance local state |
+| CRM outage lasts five attempts | No subscription is created; a resendable dead letter retains the event |
+| Replay after recovery, including repeated resend | Dead letter clears, with one CRM write |
+| Replay of an old dead letter after a newer event | Newer CRM state survives; the stale forward is resolved without another write |
+| CRM accepts a PUT but returns an error | Retry reads the accepted event ID/version and avoids another upsert |
+| Different events have the same version | One permanent 422, visible dead letter and no overwrite |
+| CRM rejects fields with 422 | No automatic retry; a dead letter requires investigation |
+| Forged signature or altered body | HookScope stores an invalid event, returns 401 and never calls the handler/CRM |
+
+The accepted-write scenario models an error response after persistence, not a literal dropped TCP
+connection or process kill. CRM persistence and concurrency are still mock contracts, not evidence of
+a vendor's guarantees. Run all lifecycle checks with:
+
+```bash
+make test RECIPE=stripe-subscription-lifecycle-to-crm
+```
+
+A manual forwarding resend can return HTTP 200 even when its JSON `status_code` is a failure. The
+recovery tests inspect both that field and `ok`, verify the CRM record, and confirm the dead-letter list
+clears. Timestamp collisions need source reconciliation rather than blind replay of the unchanged body.
 
 ## 6. Troubleshooting
 
