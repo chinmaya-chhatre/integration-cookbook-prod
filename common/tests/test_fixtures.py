@@ -23,6 +23,32 @@ def test_stripe_timestamp_is_in_header_and_payload():
     assert json.loads(request.body)["created"] == ts
 
 
+def test_subscription_snapshot_version_is_independent_of_signature_time():
+    ts = int(time.time())
+    request = fixtures.stripe_subscription_lifecycle(
+        action="deleted",
+        status="canceled",
+        subscription_id="sub_other",
+        customer_id="cus_other",
+        event_id="evt_other",
+        created=100,
+        timestamp=ts,
+    )
+    event = json.loads(request.body)
+    assert event["created"] == 100
+    assert event["id"] == "evt_other"
+    assert event["type"] == "customer.subscription.deleted"
+    assert event["data"]["object"]["id"] == "sub_other"
+    assert event["data"]["object"]["customer"] == "cus_other"
+    assert event["data"]["object"]["status"] == "canceled"
+    assert request.headers["Stripe-Signature"].startswith(f"t={ts},")
+
+
+def test_subscription_fixture_rejects_unknown_action():
+    with pytest.raises(ValueError, match="action"):
+        fixtures.stripe_subscription_lifecycle(action="resumed")
+
+
 def test_github_pull_request_reports_its_event_type():
     request = fixtures.github_pull_request(action="closed", merged=True, number=7)
     payload = json.loads(request.body)
@@ -75,6 +101,7 @@ def test_svix_and_generic_events_are_signed():
     "build",
     [
         fixtures.stripe_invoice_paid,
+        fixtures.stripe_subscription_lifecycle,
         fixtures.github_pull_request,
         fixtures.shopify_order_created,
         fixtures.svix_event,

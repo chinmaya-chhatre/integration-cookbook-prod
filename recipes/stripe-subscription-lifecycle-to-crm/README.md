@@ -8,7 +8,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 | 1. Problem and architecture | done |
 | 2. Config | done |
 | 3. Core code | done |
-| 4. Happy-path tests | to do |
+| 4. Happy-path tests | done |
 | 5. Failure-mode tests | to do |
 | 6. Troubleshooting | to do |
 | 7. Customer pack | to do |
@@ -121,15 +121,16 @@ restarting it loses its records. A real target needs its own persistence and bac
 | `STATE_DB_PATH` | Durable SQLite path, `/data/subscriptions.db` in Compose |
 | `LOG_LEVEL` | Handler log level |
 
-After the core handler is present, run from the repository root:
+Run from the repository root:
 
 ```bash
 make up RECIPE=stripe-subscription-lifecycle-to-crm
+python -m common.send stripe_subscription_lifecycle
 curl -sS http://localhost:9003/subscriptions/sub_demo
 ```
 
-The GET returns 404 until a subscription is sent. A signed subscription fixture and end-to-end demo
-arrive with the happy-path test part. The core handler now supplies the application entry point.
+The signed demo creates a trial subscription with ID `sub_demo`. The GET returns 404 until a
+subscription is sent. The core handler supplies the application entry point.
 The handler is not exposed on a host port. Do not use `make down` when preserving
 recovery data: it removes volumes. With no Docker CLI available locally, configuration is checked by
 the repository's YAML/routing tests; actual Compose validation and container startup remain CI/deployment checks.
@@ -159,7 +160,32 @@ real target's contract and size the timeout/serialization budget before producti
 
 ## 4. Happy-path tests
 
-To do: signed lifecycle fixtures through HookScope and the real HTTP handler to the CRM mock.
+[`test_subscription_happy_path.py`](test_subscription_happy_path.py) starts HookScope in process,
+the actual handler on a local HTTP port and the repository's CRM mock. Every lifecycle snapshot is
+signed with the shared Stripe fixture, posted to `/hooks/stripe`, verified and routed using this
+recipe's own rule. Tests assert the stored forwarding attempt as well as the CRM record.
+
+| Test scenario | What it proves |
+|---|---|
+| Created, updated and deleted topics | All three configured topics reach the handler with valid signatures and produce the expected CRM record |
+| Supported financial lifecycle statuses | Trial, active, past-due, incomplete, unpaid, paused and terminal states map to the documented stages |
+| Trial through cancellation | Increasing event versions advance one record through activation, payment trouble, recovery and cancellation |
+| Two subscriptions | Customer IDs and stages remain independent even when event timestamps are equal across different subscriptions |
+
+The fixture `common.fixtures.stripe_subscription_lifecycle` models a full subscription event. Its
+`created` argument controls the lifecycle version; its separate `timestamp` argument controls the
+signature time and defaults to a fresh signature. Historical snapshot versions can therefore be tested
+without making the delivery signature stale. The body remains stable for a given set of arguments.
+
+With HookScope's source on `PYTHONPATH` and its dependencies installed:
+
+```bash
+make test RECIPE=stripe-subscription-lifecycle-to-crm
+```
+
+Integration tests skip if HookScope is unavailable, so check the test summary rather than treating a
+skipped run as validation. These tests use illustrative signed fixtures and a mock CRM, not live Stripe
+or a vendor CRM. Full failure/replay coverage remains part 5, and `.wip` stays until all seven parts finish.
 
 ## 5. Failure-mode tests
 

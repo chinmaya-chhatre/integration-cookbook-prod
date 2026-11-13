@@ -67,6 +67,43 @@ def stripe_invoice_paid(
     return signing.stripe(dumps(payload), SECRETS["stripe"], timestamp=timestamp)
 
 
+def stripe_subscription_lifecycle(
+    action: str = "created",
+    status: str = "trialing",
+    subscription_id: str = "sub_demo",
+    customer_id: str = "cus_demo",
+    event_id: str = "evt_subscriptionDemo",
+    created: int = 1_760_000_000,
+    timestamp: int | None = None,
+) -> SignedRequest:
+    """A full subscription snapshot; event creation and signature timestamps are independent.
+
+    ``created`` is the stable lifecycle version. ``timestamp`` is when this delivery is signed;
+    leave it unset for a fresh signature even when exercising an older stored snapshot.
+    """
+    if action not in {"created", "updated", "deleted"}:
+        raise ValueError("action must be created, updated or deleted")
+    payload = {
+        "id": event_id,
+        "object": "event",
+        "api_version": "2024-06-20",
+        "created": created,
+        "livemode": False,
+        "type": f"customer.subscription.{action}",
+        "data": {
+            "object": {
+                "id": subscription_id,
+                "object": "subscription",
+                "customer": customer_id,
+                "status": status,
+                "cancel_at_period_end": False,
+                "items": {"object": "list", "data": []},
+            }
+        },
+    }
+    return signing.stripe(dumps(payload), SECRETS["stripe"], timestamp=timestamp)
+
+
 def github_pull_request(
     action: str = "opened",
     number: int = 42,
