@@ -10,7 +10,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 | 3. Core code | done |
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
-| 6. Troubleshooting | to do |
+| 6. Troubleshooting | done |
 | 7. Customer pack | to do |
 
 ## 1. Problem and architecture
@@ -222,7 +222,113 @@ clears. Timestamp collisions need source reconciliation rather than blind replay
 
 ## 6. Troubleshooting
 
-To do: symptoms, diagnostics, observed logs and metric examples.
+### Identify the event before changing anything
+
+Keep the Stripe event ID (`evt_...`), subscription ID (`sub_...`) and HookScope's integer event ID
+separate. A 202 from the receiver acknowledges receipt, not successful CRM application. Inspect the
+stored verification result, matching rule and every forwarding attempt before replaying.
+
+From the repository root, with the local demo running on its default ports:
+
+```bash
+curl -sS 'http://localhost:8000/api/events?source=stripe&limit=20'
+curl -sS http://localhost:8000/api/rules
+# Replace 1 with the HookScope event ID selected above.
+curl -sS http://localhost:8000/api/events/1
+curl -sS http://localhost:8000/api/events/1/forwards
+curl -sS http://localhost:8000/api/dead-letters
+curl -sS http://localhost:8000/metrics
+curl -sS http://localhost:9003/subscriptions/sub_demo
+make logs RECIPE=stripe-subscription-lifecycle-to-crm
+```
+
+Use the deployment's configured URL and authentication outside the unauthenticated local demo. Do not
+paste credentials or full production payloads into tickets. The handler's `/healthz` is a liveness check;
+it does not prove the CRM is reachable or the state volume is writable.
+
+### Symptoms and resolution
+
+| Symptom | Likely cause | Check | Resolution |
+|---|---|---|---|
+| No stored event | Wrong webhook URL or unavailable receiver | Stripe delivery result and receiver logs | Restore reachability to `/hooks/stripe` and verify the subscription endpoint |
+| Invalid signature, no forwards | Incorrect signing secret, stale signature time or modified bytes | Stored verification result, signature header and proxy handling | Correct the secret/transport; send a newly signed delivery without changing its event version; never disable verification |
+| Valid event, no forwards | Topic not in the loaded rule | Event type and `/api/rules` | Load this recipe's three lifecycle topics and recreate/restart the receiver after configuration changes |
+| Forward 200 but no new CRM write | Duplicate, stale or terminal-state regression was deliberately ignored | Handler result log, stored version/event ID and CRM record | Confirm the newer/terminal record is correct; 200 does not imply a new write |
+| Forward 422, CRM unchanged | Invalid snapshot, conflicting deletion or same-second collision | Original snapshot, `created`, status and event ID; target validation details for CRM rejection | Reconcile against authoritative source state; unchanged replay cannot fix invalid data or choose between equal timestamps |
+| Forward 502 | CRM 429/5xx, timeout, bad target contract, unknown conflict or SQLite/storage problem | Handler warning identifies read/write status or storage/network error | Restore capacity/connectivity, correct URL/key/contract, or repair volume access before resend |
+| Five failed attempts and a dead letter | Failure outlasted the retry budget | Forward history and `resendable` field | Resolve the fault, then resend only the failed rule |
+| Replayed old event returns success | Newer subscription state already superseded it | CRM version/event ID versus stored snapshot | Expected stale-event handling; do not force an older state into the CRM |
+| CRM missing after restart but duplicate is ignored | Mock CRM lost its in-memory data while SQLite retained applied state | CRM record missing, persisted local subscription still present | Restore/reconcile the target from an approved source; do not delete the local database to force bulk replay |
+
+The version is `event.created`, not the signature timestamp. Distinct events created in the same second
+are intentionally surfaced as 422. Reconcile through an agreed source-of-truth correction procedure;
+do not sort event IDs, edit recorded timestamps or delete the database to invent an ordering.
+
+### Observed logs and metrics
+
+These excerpts were captured locally from the signed integration stack with five injected CRM read
+500 responses. Backoff sleeping was disabled in this test. HookScope timestamp/request-ID prefixes
+are omitted; handler message text is unchanged:
+
+```text
+event received event_id=1 source=stripe verification=valid reason=None cause=None delivery_id=evt_subscriptionDemo bytes=317
+subscription delivery failed: CRM read returned 500
+forward attempt event_id=1 rule=subscription-lifecycle attempt=1 status_code=502 elapsed_ms=6 error=None
+forward attempt event_id=1 rule=subscription-lifecycle attempt=5 status_code=502 elapsed_ms=2 error=None
+```
+
+The CRM's 500 becomes a handler 502. A write failure names `CRM write returned <code>` instead.
+Handler INFO results such as `applied`, `duplicate`, `stale` and `terminal` identify successful policy
+decisions; warnings identify retryable delivery failures. Invalid-event reasons are in the handler
+response. Inspect stored snapshots and the current source state when diagnosing a permanent 422.
+
+Selected samples after exhaustion:
+
+```text
+hookscope_deliveries_total{source="stripe",verification="valid"} 1
+hookscope_forward_attempts_total{rule="subscription-lifecycle",outcome="failure"} 5
+hookscope_dead_letters 1
+```
+
+The rule normally waits 2, 4, 8 and 16 seconds between its five attempts, plus request durations.
+CRM `Retry-After` is not propagated by this handler. Forward counts include retries and ignored events;
+they are not counts of unique CRM changes. The dead-letter gauge covers all rules. Use the list API
+to identify this recipe, and alert on sustained failures or pending dead letters with a named operator.
+
+### Recover a failed forward
+
+1. Preserve HookScope events, the handler SQLite database and the CRM record. Confirm the real target's
+   version/conflict contract and compare its event ID/version with the failed snapshot.
+2. Fix the underlying service/configuration issue. For permanent input errors or timestamp ambiguity,
+   reconcile source state before choosing a correction; do not repeatedly resend unchanged invalid data.
+3. Resend only the `subscription-lifecycle` forward for the selected HookScope event:
+
+```bash
+curl -sS -X POST http://localhost:8000/api/events/1/forwards/subscription-lifecycle/resend
+curl -sS http://localhost:8000/api/events/1/forwards
+curl -sS http://localhost:8000/api/dead-letters
+curl -sS http://localhost:9003/subscriptions/sub_demo
+```
+
+Check JSON `status_code` and `ok` as well as HTTP status. In the captured recovery the resend returned
+`status_code: 200`, `ok: true`, `attempt: 6` and `response_body: {"result": "applied"}`. The handler logged:
+
+```text
+subscription sub_demo event evt_subscriptionDemo: applied
+```
+
+After recovery, the failure counter remained 5, a success appeared and the pending gauge cleared:
+
+```text
+hookscope_forward_attempts_total{rule="subscription-lifecycle",outcome="failure"} 5
+hookscope_forward_attempts_total{rule="subscription-lifecycle",outcome="success"} 1
+hookscope_dead_letters 0
+```
+
+An already accepted event can instead resolve as `duplicate`, and an older event as `stale`. Verify the
+actual CRM record; a cleared dead letter alone does not prove the requested source state is current.
+Keep the handler on the replay path so ordering and terminal-state policy still run. `make down` deletes
+volumes, so it is unsuitable when preserving pending events or applied subscription state.
 
 ## 7. Customer pack
 
