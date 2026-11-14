@@ -11,7 +11,7 @@ snapshot after a newer one. This example targets the repository's CRM mock, not 
 | 4. Happy-path tests | done |
 | 5. Failure-mode tests | done |
 | 6. Troubleshooting | done |
-| 7. Customer pack | to do |
+| 7. Customer pack | done |
 
 ## 1. Problem and architecture
 
@@ -332,4 +332,117 @@ volumes, so it is unsuitable when preserving pending events or applied subscript
 
 ## 7. Customer pack
 
-To do: FAQ, discovery questions and a go-live checklist.
+### FAQ
+
+**What does completion of this recipe mean?** The example includes architecture, configuration, core
+code, signed happy-path and failure tests, troubleshooting and this handover pack. Tests use a mock
+CRM and illustrative Stripe snapshots. It has not been validated against a live Stripe account or a
+vendor CRM; customer deployment acceptance remains a separate activity.
+
+**Which events are supported?** Full subscription snapshots for `customer.subscription.created`,
+`customer.subscription.updated` and `customer.subscription.deleted`. Thin events needing an extra
+source API fetch, invoice/payment workflows and historical backfill are not implemented here.
+
+**Is this exactly-once delivery?** No. Delivery may repeat. The local state machine recognizes applied
+event IDs/versions, while CRM reads reconcile a write accepted before a response or local commit was
+lost. The target must preserve this metadata and enforce its version contract. Those mechanisms reduce
+duplicate upserts under the stated single-writer contract; they do not establish an end-to-end
+exactly-once guarantee for arbitrary downstream side effects.
+
+**How are events ordered?** By integer `event.created` per subscription. Older versions are ignored.
+Different events with equal timestamps receive 422 and need reconciliation against authoritative
+source state. Event IDs are not used as a chronological tie-breaker. Do not deploy this timestamp-only
+ordering policy if same-second changes must be resolved automatically without a reconciliation workflow.
+
+**Can an ended subscription become active again?** Not under this recipe's terminal-state policy.
+`canceled` and `incomplete_expired` cannot be revived by later nonterminal snapshots for the same ID.
+A new subscription needs a new ID. Confirm that this matches the customer's lifecycle rules.
+
+**What does a CRM need to support?** GET/PUT by subscription ID, GET metadata including `id`, `version`,
+`event_id` and `status`, 200/201 acceptance, and an atomic rejection of lower versions. A stale 409 must
+report a strictly greater `current_version`; other conflicts remain failures. This is a mock-specific
+contract, not a claim that a named CRM implements these endpoints. Build and test an adapter if needed.
+
+**Can multiple workers or Stripe accounts share it?** One Stripe account per deployment, with one
+coordinated writer path per CRM record set. The shared local SQLite file serializes calls across handler
+instances; separate databases, network filesystems and uncoordinated external writers are outside the
+contract. Partition accounts and agree an ID namespace before extending to multiple accounts.
+
+**What happens during an outage?** Five forwarding attempts with 2, 4, 8 and 16 seconds of waiting,
+plus network/storage durations, then a retained dead letter. An operator can resend after repair.
+The handler does not pass CRM `Retry-After` through. Confirm that this budget, event retention and
+manual recovery window fit the customer's availability needs.
+
+**Which data and credentials must be protected?** The CRM receives subscription/customer IDs, status,
+stage, event ID and version. HookScope stores the full original webhook, which may contain more data.
+Protect that store, SQLite, backups and logs; restrict administrative inspection/resend. The handler
+trusts private HookScope forwarding and does not independently verify signatures. The local demo uses
+HTTP and demo credentials; real deployment needs HTTPS at external boundaries, network isolation,
+secret injection and a rotation procedure.
+
+**What if the CRM loses its records?** The mock is in memory and loses records on restart, while the
+handler volume retains applied state. Restoring one side alone can leave duplicates ignored against
+an empty target. Coordinate backup/restore and reconcile against the source; do not erase SQLite or
+replay all history indiscriminately. A real CRM must provide durable records for this contract.
+
+### Discovery questions
+
+| Topic | Ask the customer | Record before implementation |
+|---|---|---|
+| Source | Which Stripe account, test/live environment and snapshot event format? | Account boundary, endpoint ownership and supported topics |
+| Lifecycle | How should trials, payment trouble, paused and terminal states affect sales/support? | Approved status-to-stage mapping and terminal policy |
+| Ordering | Are same-second changes acceptable for manual reconciliation? Who owns authoritative state lookup? | Reconciliation workflow, owner and response time |
+| CRM contract | Are versioned GET/PUT, conflict metadata and durable event IDs available? Are other systems writing these records? | Adapter requirements, version semantics and sole/coordinated writer boundary |
+| Capacity | What are peak rates, CRM limits and acceptable freshness? | Load evidence, concurrency strategy and timeout/retry budget |
+| Recovery | How long are events retained? Who handles permanent failures and restores both stores? | Retention, replay permissions and coordinated restore plan |
+| Security | Who rotates secrets and can view payloads or trigger resend? | Network/access policy, storage protection and deletion schedule |
+| Cutover | What existing process updates CRM subscriptions? How is source/CRM parity checked? | Cutover set, reconciliation criteria, rollback owner and sign-off |
+
+### Go-live checklist
+
+These gates are intentionally unchecked. The customer owns completing them with evidence; passing the
+repository's mock tests does not satisfy real-system acceptance.
+
+**Scope and contracts**
+
+- [ ] Confirm the single-account boundary, full snapshot format, supported topics and mapping for every
+      lifecycle status, including terminal-state behaviour.
+- [ ] Agree how same-second timestamp collisions are detected, investigated and reconciled. Require an
+      enhanced ordering/source lookup design if manual reconciliation cannot meet the business need.
+- [ ] Validate real CRM GET/PUT schema, authentication, atomic version rejection and 409 metadata.
+- [ ] Confirm that repeated writes and an accepted write with a lost/error response do not create
+      duplicate downstream actions; document any side effects the adapter cannot make idempotent.
+- [ ] Eliminate uncoordinated writers or define and test a supported coordination strategy.
+
+**Deployment and data**
+
+- [ ] Configure the authorized Stripe endpoint and signing secret; verify that valid events forward
+      and invalid signatures never reach the CRM.
+- [ ] Replace demo values with injected credentials; restrict handler connectivity and administrative
+      APIs; configure HTTPS and secret rotation for the real environment.
+- [ ] Mount a persistent SQLite file with the correct permissions and supported local locking. Size
+      and load-test the serialized CRM-call path rather than assuming horizontal scaling is safe.
+- [ ] Use a durable CRM target and back up both handler state and HookScope events. Rehearse coordinated
+      restoration and target-record-loss reconciliation. Avoid volume-deleting teardown during incidents.
+- [ ] Set retention, access and deletion policies for full webhook bodies, state files, logs and backups.
+
+**Acceptance and operations**
+
+- [ ] Exercise trial, activation, payment trouble, recovery and cancellation with authorized real-system
+      test data; verify exact source IDs, CRM stages, event IDs and versions.
+- [ ] Test duplicates, older snapshots, timestamp collisions and terminal regressions in the approved
+      environment; confirm whether ignored events or permanent dead letters match the agreed policy.
+- [ ] Exercise read/write 429/500, timeout, permanent validation errors and retry exhaustion. Verify the
+      real target's response-loss behaviour rather than relying solely on mock error responses.
+- [ ] Recover a dead letter, inspect both resend HTTP status and JSON result, and reconcile the CRM
+      record. Repeat resend and verify that stale history cannot regress newer state.
+- [ ] Monitor rule failures and pending dead letters using [Troubleshooting](#6-troubleshooting). Assign
+      an operator, escalation contact and response target; test alert delivery.
+- [ ] Record source/configuration versions, secret owners, support contacts and restoration procedures.
+- [ ] Reconcile a bounded cutover set and coordinate stopping the previous CRM sync before enabling
+      this writer. Record acceptance criteria and business-owner sign-off.
+- [ ] Agree a stop/rollback procedure that preserves events and SQLite, accounts for already running
+      forwards, and reconciles target changes. Disabling the webhook alone does not cancel in-flight work.
+
+Handover includes this README, the deployed rule/environment configuration, validation evidence and the
+customer's completed acceptance record. Keep real secrets and customer payloads out of repository files.
