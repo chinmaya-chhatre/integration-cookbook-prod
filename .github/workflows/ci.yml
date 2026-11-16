@@ -4,9 +4,13 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -16,7 +20,8 @@ jobs:
       - run: make lint
 
   docs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -29,7 +34,8 @@ jobs:
 
   test:
     name: test (python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
@@ -39,11 +45,35 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -r requirements-dev.txt
+      - uses: actions/checkout@v5
+        with:
+          repository: chinmaya-chhatre/hookscope-prod
+          ref: b4e012c304ea69ca29fd544ab0ab2864e5cf11f6
+          path: hookscope-src
+      - run: pip install -r hookscope-src/requirements.txt
+      - name: Verify integration dependency
+        run: python -c "import hookscope.main; print(hookscope.main.__file__)"
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hookscope-src
       - run: make test
+        env:
+          PYTHONPATH: ${{ github.workspace }}/hookscope-src
+          PYTEST_ADDOPTS: --junitxml=test-results.xml
+      - name: Require complete test execution
+        run: python scripts/check_test_report.py test-results.xml
+      - name: Save test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tests-python-${{ matrix.python-version }}
+          path: test-results.xml
+          if-no-files-found: error
+          retention-days: 14
 
   compose:
     name: compose files are valid
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -53,7 +83,8 @@ jobs:
 
   discover:
     name: find recipes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       recipes: ${{ steps.list.outputs.recipes }}
     steps:
@@ -67,7 +98,8 @@ jobs:
     name: recipe ${{ matrix.recipe }}
     needs: discover
     if: needs.discover.outputs.recipes != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -82,6 +114,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: chinmaya-chhatre/hookscope-prod
+          ref: b4e012c304ea69ca29fd544ab0ab2864e5cf11f6
           path: hookscope-src
       - run: pip install -r hookscope-src/requirements.txt
       - run: make test RECIPE=${{ matrix.recipe }}
