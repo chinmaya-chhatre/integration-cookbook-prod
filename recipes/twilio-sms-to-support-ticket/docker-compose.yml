@@ -1,0 +1,37 @@
+# Merge after docker-compose.base.yml; paths resolve from the repository root.
+# The handler build context is supplied by the next core-code step.
+services:
+  handler:
+    build: ./recipes/twilio-sms-to-support-ticket/handler
+    env_file: ./recipes/twilio-sms-to-support-ticket/recipe.env
+    volumes:
+      - ticket-state:/data
+    depends_on:
+      support:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  hookscope:
+    depends_on:
+      handler:
+        condition: service_healthy
+
+  support:
+    # Generic ticket stand-in using the existing Jira-shaped mock, not a vendor integration.
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./common:/app/common:ro
+    command: ["python", "-m", "common.mocks", "jira", "--port", "9000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request, urllib.error\ntry:\n    urllib.request.urlopen('http://localhost:9000/rest/api/3/issue/SMS-0')\nexcept urllib.error.HTTPError as e:\n    assert e.code == 404"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  ticket-state:

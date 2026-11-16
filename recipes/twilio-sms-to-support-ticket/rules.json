@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "name": "inbound-sms",
+      "source": "twilio",
+      "target_url": "http://handler:8080/twilio/sms",
+      "retry": {
+        "attempts": 5,
+        "backoff_seconds": 2,
+        "max_backoff_seconds": 60
+      }
+    }
+  ]
+}

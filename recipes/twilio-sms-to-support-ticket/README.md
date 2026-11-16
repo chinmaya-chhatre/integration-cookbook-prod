@@ -2,7 +2,7 @@
 
 ## Problem and scope
 
-Turn an inbound SMS into a support ticket without losing messages during a target outage or creating duplicate tickets after redelivery. This recipe designs the boundary between Twilio, HookScope, a ticket handler and a generic support API mock. It is an architecture specification; configuration, handler code and executable scenarios follow separately. It does not claim compatibility with a particular support vendor.
+Turn an inbound SMS into a support ticket without losing messages during a target outage or creating duplicate tickets after redelivery. This recipe designs the boundary between Twilio, HookScope, a ticket handler and a generic support API mock. It is an architecture specification; configuration is included, while handler code and executable scenarios follow separately. It does not claim compatibility with a particular support vendor.
 
 Inbound messaging webhooks carry `application/x-www-form-urlencoded` fields, including `MessageSid`, `AccountSid`, `From`, `To` and `Body`. They are not JSON. Parse form encoding once, preserving blank values and Unicode; do not trim, normalize or re-encode values before signature verification. Reject ambiguous duplicate parameter names rather than silently choosing a value. Unknown fields must participate in verification.
 
@@ -80,4 +80,16 @@ Honor target rate limits with bounded backoff and jitter. Retry transient transp
 
 ## Implementation status
 
-Only problem and architecture are defined here. Deployment configuration, handler, signed fixtures, failure tests, troubleshooting evidence and customer go-live material are still required before this recipe is runnable.
+Problem, architecture and deployment configuration are defined. The recipe remains marked `.wip`: the handler build context and Dockerfile arrive with core code. Compose configuration can be validated now, but `make up` is not yet supported. Signed integration scenarios, failure tests, troubleshooting evidence and customer go-live material remain outstanding.
+
+## Configuration contract
+
+Merge `docker-compose.base.yml` followed by this recipe's `docker-compose.yml`, from the repository root. Run `make config RECIPE=twilio-sms-to-support-ticket` to validate the configuration. Once the handler is implemented, `make up RECIPE=twilio-sms-to-support-ticket` will select this recipe's rules automatically.
+
+The `inbound-sms` rule forwards raw Twilio form bytes to `http://handler:8080/twilio/sms`. It deliberately has no JSON transform or event-type filter: form bodies have no JSON `type`. Five total attempts use exponential delays starting at two seconds, capped at sixty seconds. Invalid or unsigned events do not match; a missing configured secret is unsafe because HookScope permits `no_secret` events. Always supply `HOOKSCOPE_SECRET_TWILIO` through secret configuration; `make env` supplies demonstration secrets only.
+
+The handler has no published port, persists its future deduplication state at `/data/tickets.sqlite3`, and waits for the support mock. The mock uses the existing Jira-shaped issue API as a generic ticket stand-in, at `http://support:9000/rest/api/3/issue`. Neither service is exposed on a host port. HookScope waits for the handler's `/healthz`.
+
+`TWILIO_PUBLIC_URL` in `recipe.env` defines the future handler boundary contract, not a HookScope setting. The pinned HookScope dependency reconstructs the incoming URL and has no explicit public-URL override. Its current ingress also does not implement this page's TwiML acceptance contract. Do not connect a live Twilio number yet. Core implementation must supply a trusted URL/signature boundary, authenticated internal delivery, duplicate-parameter rejection and durable acceptance before declaring the full recipe runnable. Never solve URL mismatches by disabling signature checks.
+
+CI keeps HookScope pinned to `b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`. The shared Compose base currently builds production main; do not treat that development stack as evidence of pinned-version behavior. Configuration tests exercise the actual pinned rules parser and verify that form payloads match without a JSON event type. Full-suite CI includes these tests while the completed-recipe matrix continues to exclude this unfinished recipe.
