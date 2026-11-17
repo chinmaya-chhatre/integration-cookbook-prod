@@ -93,3 +93,15 @@ The handler has no published port, persists its future deduplication state at `/
 `TWILIO_PUBLIC_URL` in `recipe.env` defines the future handler boundary contract, not a HookScope setting. The pinned HookScope dependency reconstructs the incoming URL and has no explicit public-URL override. Its current ingress also does not implement this page's TwiML acceptance contract. Do not connect a live Twilio number yet. Core implementation must supply a trusted URL/signature boundary, authenticated internal delivery, duplicate-parameter rejection and durable acceptance before declaring the full recipe runnable. Never solve URL mismatches by disabling signature checks.
 
 CI keeps HookScope pinned to `b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`. The shared Compose base currently builds production main; do not treat that development stack as evidence of pinned-version behavior. Configuration tests exercise the actual pinned rules parser and verify that form payloads match without a JSON event type. Full-suite CI includes these tests while the completed-recipe matrix continues to exclude this unfinished recipe.
+
+## Core transform
+
+`transform.py` provides `parse_message(raw_bytes)` and `ticket_payload(message)`.
+Call it only after signature verification against the original public URL and bytes.
+It preserves Unicode, blank SMS bodies and literal plus signs, rejects duplicate
+parameter names (including encoded aliases), malformed encoding, invalid message
+identities and media messages. Payloads use an account-scoped external reference.
+This is a pure transform, not the HTTP handler or a durable delivery guarantee.
+The configured handler build context remains outstanding, so `make up` remains
+unsupported. Signature-boundary, persistence and delivery integration tests must
+be completed before removing `.wip` or connecting a live number.
