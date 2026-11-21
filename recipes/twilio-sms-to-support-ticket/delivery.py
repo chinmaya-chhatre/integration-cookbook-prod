@@ -23,7 +23,9 @@ class Outbox:
         if not identity or payload.get("external_reference") != identity:
             raise ValueError("payload must carry its stable external reference")
         encoded = json.dumps(payload, sort_keys=True)
-        with closing(sqlite3.connect(self.path)) as db, db:
+        with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+            # Claim the write lock before reading so concurrent duplicates see the winner.
+            db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT payload FROM tickets WHERE identity = ?", (identity,)).fetchone()
             if existing:
                 if existing[0] != encoded:
