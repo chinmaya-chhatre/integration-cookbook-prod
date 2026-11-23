@@ -80,6 +80,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: make config PYTHON=python
+      - name: Build SMS handler runtime
+        run: docker build -f recipes/twilio-sms-to-support-ticket/handler/Dockerfile .
 
   discover:
     name: find recipes

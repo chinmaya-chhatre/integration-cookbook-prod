@@ -1,8 +1,9 @@
 # Merge after docker-compose.base.yml; paths resolve from the repository root.
-# The handler build context is supplied by the next core-code step.
 services:
   handler:
-    build: ./recipes/twilio-sms-to-support-ticket/handler
+    build:
+      context: .
+      dockerfile: recipes/twilio-sms-to-support-ticket/handler/Dockerfile
     env_file: ./recipes/twilio-sms-to-support-ticket/recipe.env
     volumes:
       - ticket-state:/data

@@ -2,7 +2,7 @@
 
 ## Problem and scope
 
-Turn an inbound SMS into a support ticket without losing messages during a target outage or creating duplicate tickets after redelivery. This recipe designs the boundary between Twilio, HookScope, a ticket handler and a generic support API mock. It is an architecture specification; configuration is included, while handler code and executable scenarios follow separately. It does not claim compatibility with a particular support vendor.
+Turn an inbound SMS into a support ticket without losing messages during a target outage or creating duplicate tickets after redelivery. This recipe designs the boundary between Twilio, HookScope, a ticket handler and a generic support API mock. The signed ingress, durable outbox, HTTP runtime and retry worker are implemented; deployment integration remains in progress. It does not claim compatibility with a particular support vendor.
 
 Inbound messaging webhooks carry `application/x-www-form-urlencoded` fields, including `MessageSid`, `AccountSid`, `From`, `To` and `Body`. They are not JSON. Parse form encoding once, preserving blank values and Unicode; do not trim, normalize or re-encode values before signature verification. Reject ambiguous duplicate parameter names rather than silently choosing a value. Unknown fields must participate in verification.
 
@@ -80,7 +80,7 @@ Honor target rate limits with bounded backoff and jitter. Retry transient transp
 
 ## Implementation status
 
-Problem, architecture and deployment configuration are defined. The recipe remains marked `.wip`: the handler build context and Dockerfile arrive with core code. Compose configuration can be validated now, but `make up` is not yet supported. Signed integration scenarios, failure tests, troubleshooting evidence and customer go-live material remain outstanding.
+The core is packaged in an unprivileged container with an HTTP listener and retry worker. See [Runtime](RUNTIME.md) for configuration, routing and shutdown. Signed ingress, persistence, retry and HTTP tests execute in the full suite. The recipe remains marked `.wip`: deployment wiring, a compatible support mock and customer go-live material are still required. `make up` is not an end-to-end acceptance test.
 
 ## Configuration contract
 
@@ -88,9 +88,9 @@ Merge `docker-compose.base.yml` followed by this recipe's `docker-compose.yml`, 
 
 The `inbound-sms` rule forwards raw Twilio form bytes to `http://handler:8080/twilio/sms`. It deliberately has no JSON transform or event-type filter: form bodies have no JSON `type`. Five total attempts use exponential delays starting at two seconds, capped at sixty seconds. Invalid or unsigned events do not match; a missing configured secret is unsafe because HookScope permits `no_secret` events. Always supply `HOOKSCOPE_SECRET_TWILIO` through secret configuration; `make env` supplies demonstration secrets only.
 
-The handler has no published port, persists its future deduplication state at `/data/tickets.sqlite3`, and waits for the support mock. The mock uses the existing Jira-shaped issue API as a generic ticket stand-in, at `http://support:9000/rest/api/3/issue`. Neither service is exposed on a host port. HookScope waits for the handler's `/healthz`.
+The handler has no published port, persists its deduplication state at `/data/tickets.sqlite3`, and waits for the support mock. The mock uses the existing Jira-shaped issue API as a generic ticket stand-in, at `http://support:9000/rest/api/3/issue`. Neither service is exposed on a host port. HookScope waits for the handler's `/healthz`.
 
-`TWILIO_PUBLIC_URL` in `recipe.env` defines the future handler boundary contract, not a HookScope setting. The pinned HookScope dependency reconstructs the incoming URL and has no explicit public-URL override. Its current ingress also does not implement this page's TwiML acceptance contract. Do not connect a live Twilio number yet. Core implementation must supply a trusted URL/signature boundary, authenticated internal delivery, duplicate-parameter rejection and durable acceptance before declaring the full recipe runnable. Never solve URL mismatches by disabling signature checks.
+`TWILIO_PUBLIC_URL` defines the handler signature boundary, not a HookScope setting. The runtime requires an explicit HTTPS URL and `TWILIO_AUTH_TOKEN`; the demonstration environment is not sufficient to start it. The pinned HookScope dependency reconstructs the incoming URL and has no explicit public-URL override. Its current ingress also does not implement this page's TwiML acceptance contract. Do not connect a live Twilio number yet. Core implementation must supply a trusted URL/signature boundary, authenticated internal delivery, duplicate-parameter rejection and durable acceptance before declaring the full recipe runnable. Never solve URL mismatches by disabling signature checks.
 
 CI keeps HookScope pinned to `b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`. The shared Compose base currently builds production main; do not treat that development stack as evidence of pinned-version behavior. Configuration tests exercise the actual pinned rules parser and verify that form payloads match without a JSON event type. Full-suite CI includes these tests while the completed-recipe matrix continues to exclude this unfinished recipe.
 
@@ -102,6 +102,7 @@ It preserves Unicode, blank SMS bodies and literal plus signs, rejects duplicate
 parameter names (including encoded aliases), malformed encoding, invalid message
 identities and media messages. Payloads use an account-scoped external reference.
 This is a pure transform, not the HTTP handler or a durable delivery guarantee.
-The configured handler build context remains outstanding, so `make up` remains
+The [runtime](RUNTIME.md) packages this transform with the ingress and worker.
+The Compose deployment still needs integration wiring, so `make up` remains
 unsupported. Signature-boundary, persistence and delivery integration tests must
 be completed before removing `.wip` or connecting a live number.
