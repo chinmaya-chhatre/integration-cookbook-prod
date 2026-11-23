@@ -11,7 +11,7 @@ import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl
 from urllib.request import Request, urlopen
@@ -144,11 +144,13 @@ def test_missing_secret_fails_before_listening(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def support():
-    """A vendor-neutral HTTP contract double with stable-key deduplication."""
+def fault_support():
+    """A target retaining accepted tickets while the client process is restarted."""
     tickets = {}
     attempts = []
     lock = Lock()
+    faults = {"statuses": [], "hold_after_accept": False}
+    accepted, release = Event(), Event()
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
@@ -163,11 +165,24 @@ def support():
                 return
             with lock:
                 attempts.append((key, payload, self.headers.get("Content-Type")))
+                status = faults["statuses"].pop(0) if faults["statuses"] else None
+                if status is not None:
+                    self.send_response(status)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 previous = tickets.get(key)
                 if previous is not None and previous != payload:
                     self.send_error(409)
                     return
                 tickets[key] = payload
+                hold = faults["hold_after_accept"]
+                faults["hold_after_accept"] = False
+            if hold:
+                accepted.set()
+                release.wait(timeout=10)
+                self.close_connection = True
+                return
             self.send_response(200 if previous is not None else 201)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -179,11 +194,17 @@ def support():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_port}/tickets", tickets, attempts
+        yield f"http://127.0.0.1:{server.server_port}/tickets", tickets, attempts, faults, accepted, release
     finally:
+        release.set()
         server.shutdown()
         thread.join(timeout=5)
         server.server_close()
+
+
+@pytest.fixture
+def support(fault_support):
+    return fault_support[:3]
 
 
 def wait_for_delivery(database, expected):
@@ -239,3 +260,74 @@ def test_signed_redelivery_and_restart_create_one_ticket_then_accept_new_message
         "Second message from the same sender",
     }
     assert {key for key, _ in rows} == set(tickets)
+
+
+def wait_for_checkpoint(database, state):
+    """Observe a committed worker result without altering time or retry storage."""
+    for _ in range(200):
+        with sqlite3.connect(database) as db:
+            exists = db.execute("SELECT 1 FROM sqlite_master WHERE name = 'ticket_retries'").fetchone()
+            rows = db.execute("SELECT state FROM tickets").fetchall()
+            attempts = db.execute("SELECT attempts FROM ticket_retries").fetchall() if exists else []
+        if rows == [(state,)] and attempts:
+            return attempts
+        time.sleep(0.05)
+    pytest.fail(f"worker never committed {state}; states={rows}, attempts={attempts}")
+
+
+@pytest.mark.parametrize("status", [429, 500])
+def test_runtime_retries_target_failure_across_restart(launch, fault_support, status):
+    endpoint, tickets, attempts, faults, _, _ = fault_support
+    faults["statuses"] = [status]
+    request = twilio_inbound_sms(PUBLIC, body="Retain this message during the outage")
+    with launch(endpoint) as (_, base, database):
+        assert post(base, "/twilio/sms", request) == (200, b"<Response/>")
+        assert wait_for_checkpoint(database, "pending") == [(1,)]
+        assert tickets == {}
+        assert len(attempts) == 1
+    with launch(endpoint) as (_, base, database):
+        # Provider redelivery must not reset the persisted retry budget or identity.
+        assert post(base, "/twilio/sms", request) == (200, b"<Response/>")
+        wait_for_delivery(database, 1)
+        assert wait_for_checkpoint(database, "delivered") == [(2,)]
+    assert len(tickets) == 1
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
+    assert attempts[1][0] in tickets
+
+
+def test_permanent_target_failure_stays_in_review_after_restart(launch, fault_support):
+    endpoint, tickets, attempts, faults, _, _ = fault_support
+    faults["statuses"] = [400]
+    request = twilio_inbound_sms(PUBLIC)
+    with launch(endpoint) as (_, base, database):
+        assert post(base, "/twilio/sms", request)[0] == 200
+        assert wait_for_checkpoint(database, "review") == [(1,)]
+    with launch(endpoint) as (_, base, database):
+        assert post(base, "/twilio/sms", request)[0] == 200
+        time.sleep(0.75)
+        assert wait_for_checkpoint(database, "review") == [(1,)]
+    assert tickets == {}
+    assert len(attempts) == 1
+
+
+def test_crash_after_target_acceptance_reuses_identity_without_duplicate_ticket(launch, fault_support):
+    endpoint, tickets, attempts, faults, accepted, release = fault_support
+    faults["hold_after_accept"] = True
+    request = twilio_inbound_sms(PUBLIC, body="Accepted before worker crash")
+    with launch(endpoint) as (child, base, database):
+        assert post(base, "/twilio/sms", request) == (200, b"<Response/>")
+        assert accepted.wait(timeout=5), "target never accepted the request"
+        assert len(tickets) == len(attempts) == 1
+        # Kill while the sender is awaiting its response, before SQLite can commit delivery.
+        child.kill()
+        child.wait(timeout=5)
+        release.set()
+        with sqlite3.connect(database) as db:
+            assert db.execute("SELECT state FROM tickets").fetchall() == [("pending",)]
+    with launch(endpoint) as (_, base, database):
+        wait_for_delivery(database, 1)
+        assert post(base, "/twilio/sms", request)[0] == 200
+    assert len(tickets) == 1
+    assert len(attempts) == 2
+    assert attempts[0] == attempts[1]
