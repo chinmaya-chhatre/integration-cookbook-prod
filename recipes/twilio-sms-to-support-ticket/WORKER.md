@@ -25,5 +25,7 @@ attempts into a scheduled retry budget without reconciling target state.
 
 Tests cover persisted due times, restart recovery, retry exhaustion, transport
 loss, permanent failures and batch bounds. The worker is executable core code;
-the Compose server build context and full deployment wiring remain unfinished,
-so the recipe retains `.wip`.
+the [runtime](RUNTIME.md) packages it with the inbound HTTP server. Compose
+deployment wiring and a compatible support mock remain unfinished, so the recipe
+retains `.wip`. Use the read-only checks in [Troubleshooting](TROUBLESHOOTING.md)
+to distinguish due backlog from scheduled retries before recovery.

@@ -56,6 +56,12 @@ class Reply:
     text: str | None = None
 
 
+class BurstHTTPServer(ThreadingHTTPServer):
+    # Python 3.11/3.12 default to five queued connections. Accept concurrent
+    # fixture bursts without depending on the host's TCP retransmission timing.
+    request_queue_size = 128
+
+
 class MockServer:
     """Base class: subclasses implement ``handle``; everything else is shared."""
 
@@ -96,7 +102,7 @@ class MockServer:
 
             do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _serve
 
-        self._server = ThreadingHTTPServer((host, port), Handler)
+        self._server = BurstHTTPServer((host, port), Handler)
         self._thread = threading.Thread(
             target=self._server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True
         )

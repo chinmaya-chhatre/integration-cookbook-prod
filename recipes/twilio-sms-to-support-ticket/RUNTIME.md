@@ -37,3 +37,6 @@ injection and a public HTTPS URL, and its Jira-shaped mock does not accept the
 vendor-neutral payload. HookScope's URL reconstruction and acknowledgement
 behavior also need an explicit deployment design. Do not connect a live Twilio
 number or treat `make up` as an end-to-end acceptance test yet.
+
+See [Troubleshooting](TROUBLESHOOTING.md) for the read-only aggregate health
+command, retry-state interpretation and recovery after target acceptance loss.

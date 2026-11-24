@@ -1,62 +1,124 @@
 # Troubleshooting SMS ticket delivery
 
-The recipe remains unfinished. The inbound HTTP handler, automatic retry scheduler
-and handler build context are not available. Do not connect a live Twilio number
-or interpret a successful Compose configuration check as a runnable deployment.
+## Establish the boundary first
+
+The [runtime](RUNTIME.md) serves signed ingress and runs the persistent retry
+worker. It validates the configured public HTTPS URL, commits accepted messages
+to SQLite, then returns empty TwiML. A 200 response means durable acceptance,
+not completed ticket creation. The support target must honor the stable
+idempotency key across response loss and process restarts.
+
+The recipe still has deployment gaps: the Compose environment lacks required
+runtime settings, the Jira-shaped mock does not accept the ticket payload, and
+HookScope ingress does not implement the fixed-URL/TwiML boundary. Keep
+`.wip`; do not connect a live number or treat `make config` as an end-to-end
+acceptance test. The runtime can be tested independently with the documented
+environment and a compatible target.
+
+## Diagnose by symptom
 
 | Symptom | Likely cause | Check | Fix |
 | --- | --- | --- | --- |
-| Compose cannot build the handler | Handler build context is unfinished | Run `make config RECIPE=twilio-sms-to-support-ticket` to distinguish configuration from build errors | Complete the inbound handler before starting this stack |
-| An authentic SMS fails verification | Public URL differs from the URL used by the verifier | Compare scheme, host, path and query against the configured Twilio webhook URL | Preserve the external URL through a trusted boundary; never disable signature checks |
-| Parsing rejects a message | Duplicate fields, malformed encoding, invalid identity or media payload | Run the transform and signed ingress tests with synthetic fixtures | Preserve original bytes; reject ambiguous parameters; route media outside this SMS recipe |
-| Ticket stays pending after a target outage | Transport failure or HTTP 408, 425, 429 or 5xx | Inspect persisted state and target status without printing payloads | Restore the target, then have the worker call deliver with the original identity |
-| Ticket requires review | Target returned a non-retryable status | Check target authentication, schema and redirect configuration | Correct configuration and reconcile the target before operator recovery |
-| Replay creates a second target ticket | Target does not honor the stable idempotency key | Compare external references at the target using synthetic data | Implement target idempotency or reconciliation before replay |
-| Identity reuse raises an error | Same identity was submitted with different content | Compare redacted metadata and the producer mapping | Preserve AccountSid/MessageSid identity; investigate the conflicting message |
+| Runtime exits before listening | Missing setting, invalid public URL, empty token or unwritable database directory | Check the variable names in Runtime and the container exit status; inspect secret configuration without printing its values | Supply all required settings and writable persistent storage; never bypass validation |
+| Health endpoint is unreachable | Process stopped, listener inaccessible or worker failed | Request the internal `GET /healthz`; check process state and container health | Restore the process and storage, then verify health before accepting traffic |
+| Signed POST returns 404 | Wrong internal path or query string | Compare the proxy route with `/twilio/sms` and the public URL query | Preserve query bytes and route the public path to the internal SMS path |
+| Authentic POST returns 403 | Token, exact public URL or signed field value differs | Compare scheme, host, path and query with provider configuration using a synthetic signed fixture | Correct the fixed URL/token and preserve form bytes; forwarding headers never override the verifier |
+| POST returns 400 | Invalid form encoding, duplicate fields, missing identity or media message | Run signed ingress tests with synthetic data | Preserve original bytes and all signed fields; handle media outside this SMS recipe |
+| POST returns 409 | Existing account/message identity has different content | Reconcile the provider event and target external reference through an authorized interface | Investigate identity reuse; do not invent an identity to force acceptance |
+| POST returns 503 | Durable enqueue failed | Check database mount, free disk, read/write permissions and lock contention | Restore persistence before allowing provider retries; do not acknowledge an uncommitted write |
+| TwiML succeeds but work remains pending | Target outage, transport error, HTTP 408/425/429/5xx, scheduled delay or stopped worker | Sample aggregate health twice, check process health and redacted target status | Restore target/worker and allow scheduled retries using the same identity |
+| Work moves to review | Permanent target failure or five transient attempts exhausted | Check target authentication/schema and the persisted state counts | Reconcile target acceptance before operator recovery; review entries are not retried automatically |
+| Replay creates duplicate target tickets | Target ignores stable idempotency keys or lost its deduplication state | Compare target external references using synthetic data | Restore target idempotency/reconciliation before replay; restarting the local worker cannot fix it |
+| HTTP redirect leads to review | Endpoint changed or a proxy redirects requests | Verify the configured final target URL without forwarding credentials | Configure the trusted final endpoint; the sender deliberately refuses redirects |
+| Compose starts incorrectly or target rejects every request | Current demonstration wiring is incomplete | Inspect the limitations above and Runtime | Complete deployment integration; do not substitute the Jira mock for a compatible support API |
 
-## Inspect persisted state safely
+Health is liveness, not a target-connectivity or backlog-readiness check. The
+listener can be healthy while target delivery is failing. The runtime suppresses
+HTTP access logs to avoid exposing paths, signatures and personal data.
 
-Back up the SQLite volume before recovery. Query counts rather than SMS content:
+## Read aggregate health safely
 
-```sql
-SELECT state, COUNT(*) FROM tickets GROUP BY state;
+From the repository root, on a host with access to the actual persisted database:
+
+```sh
+python recipes/twilio-sms-to-support-ticket/diagnostics.py --database /data/tickets.sqlite3
 ```
 
-Example diagnostic result, not production telemetry:
+For a separately started handler container, run the same command against its
+mounted volume using `python /app/diagnostics.py --database /data/tickets.sqlite3`.
+Do not assume the host's `/data` is the container's volume. The command uses
+SQLite read-only mode, opens one consistent read transaction and does not
+initialize a missing file. It never selects payloads, message identities, phone
+numbers, tokens or signatures. A missing/unreadable database or incompatible
+schema returns exit code 2 with a generic error, not a healthy zero backlog.
 
-```text
-delivered|12
-pending|2
-review|1
+Example output from synthetic fixtures, not production telemetry:
+
+```json
+{"max_pending_attempts": 4, "pending_due": 2, "pending_scheduled": 1, "sampled_at_epoch": 100, "states": {"delivered": 1, "pending": 3, "review": 1}}
 ```
 
-Pending work is retained across reopening the database. There is no automatic
-retry timer in the current component. A worker must call `deliver(identity, sender)`
-again. Delivered and review entries are not resent by that method. Do not delete
-rows or manufacture identities to force retries. For review entries, reconcile
-the external reference at the target before designing an explicit recovery path.
+| Field | Meaning |
+| --- | --- |
+| states | Counts of pending, delivered and review records, including zero counts |
+| pending_due | Pending records whose persisted due time has passed, plus new records with no retry checkpoint |
+| pending_scheduled | Pending records waiting for a future due time |
+| max_pending_attempts | Largest committed attempt count among pending records; zero before a first checkpoint |
+| sampled_at_epoch | Unix seconds used to classify due times |
 
-## Verify recovery
+Due counts use wall-clock time, so host clock changes affect them. Counts do not
+identify which target HTTP status caused a failure. Two samples can show backlog
+growth or a worker that is not draining due work; they cannot prove that the
+target has created a ticket. The command is an on-demand diagnostic, not an
+exported metric, alerting service or retention mechanism.
 
-Run `python -m pytest tests/test_twilio_delivery.py tests/test_twilio_http_delivery.py`
-from the repository root. These checks cover target outages, persisted replay,
-response loss with stable keys, redirects and permanent failures. Run the full
-suite before release. A passing mock test establishes the component contract,
-not a guarantee that a real support vendor implements idempotency.
+A read may observe pending work while a sender is awaiting a target response.
+SQLite serializes worker writes, including network attempts. Do not diagnose a
+stalled worker from a single snapshot or start extra workers to bypass the lock.
+Back up storage using SQLite's backup API or a consistent stopped-volume backup.
+A live database may have journal files; copying only the main file is unsafe.
 
-For response loss, the target may already have accepted the ticket. Keep the
-same external reference and idempotency key after restart. Verify that replay
-returns the existing ticket instead of creating another.
+## Recover without changing identity
 
-## Operational evidence
+1. Stop uncontrolled/manual replays and preserve the database and target
+   deduplication records. Do not run `make down` during recovery: it removes
+   Compose volumes with `down -v`.
+2. Restore the trusted final target URL, bearer credential and network access.
+   Do not log secret values or SMS contents while investigating.
+3. For pending work, restore the runtime against the same database. Its worker
+   persists due times and attempts: failed attempts wait 2, 4, 8 and 16 seconds,
+   and a fifth transient failure moves the record to review. Restart and
+   provider redelivery do not reset this budget.
+4. If the target may have accepted before a lost response or worker crash,
+   reconcile its external reference. The next pending attempt reuses the same
+   key. Target idempotency must survive this failure window.
+5. Review entries need an explicit operator decision and target reconciliation.
+   There is no supported command to reset review entries automatically. Do not
+   delete rows, change state with SQL, or manufacture new message identities.
+   `Outbox.deliver` bypasses scheduled timing for pending entries and is not a
+   review-reset API; mixing it into unattended processing bypasses retry budgets.
+6. Check aggregate counts again and confirm target records through an authorized
+   interface. Verify that duplicate provider deliveries create no extra ticket
+   and a genuinely new MessageSid creates another ticket.
 
-The current components do not emit structured logs or export metrics. Do not
-assume dashboards or alerts exist. An operator can derive pending and review
-counts from the query above. A future worker should report redacted outcomes,
-for example `delivery state=pending target_status=429`, without recording tokens,
-signatures, phone numbers or message bodies. Such a line is a proposed log
-format, not output emitted by this implementation.
+The worker does not honor `Retry-After` or add jitter; its bounded exponential
+policy is documented in [Scheduled delivery](WORKER.md). Account for target rate
+limits before production use. Escalate growing due backlog, any review count,
+missing persistent storage or an inability to reconcile target acceptance.
+No structured delivery logs or exported metrics exist in this component; do not
+promise dashboard alerts or quote proposed log lines as observed output.
 
-Escalate growing pending counts, any review count, missing persistent storage,
-or an inability to reconcile target acceptance. Keep backups and access controls
-on the database because it contains ticket descriptions.
+## Verify the recovery procedure
+
+Run these tests from the repository root:
+
+```sh
+python -m pytest tests/test_twilio_diagnostics.py tests/test_twilio_worker.py tests/test_twilio_runtime.py
+```
+
+They cover aggregate redaction, read-only access and failure reporting, persisted
+retry timing and budget, HTTP 429/500 recovery across restart, permanent failures
+remaining in review, and a process killed after target acceptance but before
+local delivery commit. The target mock verifies key reuse without a second
+ticket. Run the full required suite before release. These are component
+contracts, not real-vendor certification or Compose deployment acceptance.

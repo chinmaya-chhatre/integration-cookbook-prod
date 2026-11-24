@@ -4,4 +4,4 @@
 
 Local HTTP tests exercise target 429/500, reopening the database and replaying with the same key and body. A redirect produces review state without following it. The target must implement idempotency or external-reference reconciliation; this adapter cannot provide that guarantee itself.
 
-The HTTP adapter is now available. Automatic retry scheduling and the inbound handler/Compose build context remain unfinished, so the recipe stays `.wip`.
+The adapter runs inside the [runtime](RUNTIME.md) with automatic [retry scheduling](WORKER.md). Compose deployment wiring and a compatible support mock remain unfinished, so the recipe stays `.wip`. See [Troubleshooting](TROUBLESHOOTING.md) before recovery or replay.

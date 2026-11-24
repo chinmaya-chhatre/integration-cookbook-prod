@@ -4,4 +4,4 @@
 
 Valid messages enter the SQLite outbox before the empty TwiML response is returned. Duplicate messages retain one record. Persistence failure returns 503, so a failed write is never acknowledged. Configure and verify provider retry behavior separately. The response does not send an SMS or create a support ticket synchronously.
 
-The callable is core code, not a deployed server. The Compose handler build context, worker scheduling, authenticated internal routing and production deployment remain unfinished. Keep `.wip` and do not connect a live number. The target must honor stable idempotency keys before worker replay is safe.
+The callable is packaged with an HTTP server and scheduled worker in the [runtime](RUNTIME.md). Compose deployment wiring and a compatible support mock remain unfinished. Keep `.wip` and do not connect a live number. The target must honor stable idempotency keys before worker replay is safe. See [Troubleshooting](TROUBLESHOOTING.md) for read-only backlog checks and recovery.
