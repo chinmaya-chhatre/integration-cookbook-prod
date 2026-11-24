@@ -26,7 +26,8 @@ def test_env_file_has_one_secret_per_provider():
 
 def test_compose_runs_hookscope_with_health_check_and_data_volume():
     service = COMPOSE["services"]["hookscope"]
-    assert service["ports"] == ["${HOOKSCOPE_PORT:-8000}:8000"]
+    assert service["ports"] == ["127.0.0.1:${HOOKSCOPE_PORT:-8000}:8000"]
+    assert service["build"]["context"].endswith("#b4e012c304ea69ca29fd544ab0ab2864e5cf11f6")
     assert service["environment"]["HOOKSCOPE_RULES"] == "/config/rules.json"
     assert "healthcheck" in service
     assert "hookscope-data:/data" in service["volumes"]

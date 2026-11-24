@@ -1,5 +1,22 @@
 # Merge after docker-compose.base.yml; paths resolve from the repository root.
 services:
+  ingress:
+    build:
+      context: .
+      dockerfile: recipes/twilio-sms-to-support-ticket/handler/Dockerfile
+    command: ["python", "gateway.py"]
+    env_file: ./recipes/twilio-sms-to-support-ticket/recipe.env
+    ports:
+      - "127.0.0.1:${SMS_PORT:-8081}:8080"
+    depends_on:
+      hookscope:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 12
+
   handler:
     build:
       context: .
@@ -12,27 +29,34 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
       retries: 12
 
   hookscope:
+    environment:
+      # Public demonstration credentials, never use these for a real account.
+      HOOKSCOPE_ADMIN_PASSWORD: cookbook-sms-admin
+      HOOKSCOPE_SECRET_TWILIO: cookbook-twilio-auth-token
+      HOOKSCOPE_LOG_FORMAT: json
     depends_on:
       handler:
         condition: service_healthy
 
   support:
-    # Generic ticket stand-in using the existing Jira-shaped mock, not a vendor integration.
-    image: python:3.12-slim
-    working_dir: /app
+    build:
+      context: .
+      dockerfile: recipes/twilio-sms-to-support-ticket/handler/Dockerfile
+    command: ["python", "support_mock.py"]
+    env_file: ./recipes/twilio-sms-to-support-ticket/recipe.env
     volumes:
-      - ./common:/app/common:ro
-    command: ["python", "-m", "common.mocks", "jira", "--port", "9000"]
+      - support-state:/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request, urllib.error\ntry:\n    urllib.request.urlopen('http://localhost:9000/rest/api/3/issue/SMS-0')\nexcept urllib.error.HTTPError as e:\n    assert e.code == 404"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/healthz')"]
       interval: 3s
       timeout: 3s
-      retries: 10
+      retries: 12
 
 volumes:
   ticket-state:
+  support-state:

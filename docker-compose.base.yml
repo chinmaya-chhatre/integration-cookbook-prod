@@ -9,10 +9,10 @@ services:
   hookscope:
     # Built from source until a published image exists; the first build takes a minute.
     build:
-      context: https://github.com/chinmaya-chhatre/hookscope-prod.git#main
+      context: https://github.com/chinmaya-chhatre/hookscope-prod.git#b4e012c304ea69ca29fd544ab0ab2864e5cf11f6
     image: hookscope-cookbook
     ports:
-      - "${HOOKSCOPE_PORT:-8000}:8000"
+      - "127.0.0.1:${HOOKSCOPE_PORT:-8000}:8000"
     env_file:
       - path: .env
         required: false

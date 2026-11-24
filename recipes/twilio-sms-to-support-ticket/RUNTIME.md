@@ -31,12 +31,18 @@ Request access logs are suppressed to avoid exposing personal data. Persist
 `/data` across container replacements. The target must honor the idempotency key,
 including after an accepted response is lost.
 
-This runtime completes the deployable core, but the demonstration stack remains
-unfinished and marked `.wip`. Its environment file still needs real secret
-injection and a public HTTPS URL, and its Jira-shaped mock does not accept the
-vendor-neutral payload. HookScope's URL reconstruction and acknowledgement
-behavior also need an explicit deployment design. Do not connect a live Twilio
-number or treat `make up` as an end-to-end acceptance test yet.
+The [demonstration stack](README.md#run-the-synthetic-demonstration) now supplies
+a TwiML edge and a compatible persistent support mock. The edge sends the fixed
+public URL headers to pinned HookScope and confirms a successful handler forward
+before acknowledgement. Use the edge's published port, not HookScope's raw receipt
+endpoint, for provider requests. The recipe retains `.wip` pending customer
+handover material. The public example URL and credentials are synthetic; a live
+deployment requires actual TLS, private backend networking and secret injection.
 
 See [Troubleshooting](TROUBLESHOOTING.md) for the read-only aggregate health
 command, retry-state interpretation and recovery after target acceptance loss.
+
+The edge also requires `HOOKSCOPE_INTERNAL_URL`, `SMS_ADMIN_TOKEN` and
+`SMS_HANDLER_URL`. The support mock uses `SUPPORT_STATE_DB` and `SUPPORT_TOKEN`.
+The checked-in environment file supplies demonstration values; keep the edge,
+HookScope and handler URL/token configuration aligned when replacing them.

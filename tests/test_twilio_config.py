@@ -48,13 +48,11 @@ def test_twilio_stack_is_private_and_retains_ticket_state():
     assert services["handler"]["volumes"] == ["ticket-state:/data"]
     assert services["hookscope"]["depends_on"]["handler"]["condition"] == "service_healthy"
     assert services["handler"]["depends_on"]["support"]["condition"] == "service_healthy"
-    assert services["support"]["command"] == [
-        "python",
-        "-m",
-        "common.mocks",
-        "jira",
-        "--port",
-        "9000",
-    ]
+    assert services["support"]["command"] == ["python", "support_mock.py"]
+    assert services["support"]["volumes"] == ["support-state:/data"]
+    assert services["ingress"]["command"] == ["python", "gateway.py"]
+    assert services["ingress"]["ports"] == ["127.0.0.1:${SMS_PORT:-8081}:8080"]
+    assert services["ingress"]["depends_on"]["hookscope"]["condition"] == "service_healthy"
+    assert services["hookscope"]["environment"]["HOOKSCOPE_ADMIN_PASSWORD"] == "cookbook-sms-admin"
     assert "ticket-state" in config["volumes"]
     assert (RECIPE / ".wip").exists()

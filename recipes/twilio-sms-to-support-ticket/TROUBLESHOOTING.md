@@ -8,12 +8,12 @@ to SQLite, then returns empty TwiML. A 200 response means durable acceptance,
 not completed ticket creation. The support target must honor the stable
 idempotency key across response loss and process restarts.
 
-The recipe still has deployment gaps: the Compose environment lacks required
-runtime settings, the Jira-shaped mock does not accept the ticket payload, and
-HookScope ingress does not implement the fixed-URL/TwiML boundary. Keep
-`.wip`; do not connect a live number or treat `make config` as an end-to-end
-acceptance test. The runtime can be tested independently with the documented
-environment and a compatible target.
+The [Compose demonstration](README.md#run-the-synthetic-demonstration) now runs
+the edge, pinned HookScope, handler and persistent support mock. Run its signed
+smoke check, not just `make config`. The edge confirms handler acceptance before
+returning TwiML; a HookScope capture receipt alone does not prove persistence.
+Keep `.wip` until customer handover is complete. The checked-in credentials and
+HTTPS URL are synthetic and must not be used with a live number.
 
 ## Diagnose by symptom
 
@@ -30,7 +30,7 @@ environment and a compatible target.
 | Work moves to review | Permanent target failure or five transient attempts exhausted | Check target authentication/schema and the persisted state counts | Reconcile target acceptance before operator recovery; review entries are not retried automatically |
 | Replay creates duplicate target tickets | Target ignores stable idempotency keys or lost its deduplication state | Compare target external references using synthetic data | Restore target idempotency/reconciliation before replay; restarting the local worker cannot fix it |
 | HTTP redirect leads to review | Endpoint changed or a proxy redirects requests | Verify the configured final target URL without forwarding credentials | Configure the trusted final endpoint; the sender deliberately refuses redirects |
-| Compose starts incorrectly or target rejects every request | Current demonstration wiring is incomplete | Inspect the limitations above and Runtime | Complete deployment integration; do not substitute the Jira mock for a compatible support API |
+| Edge returns 503 although HookScope captured an event | No matching confirmed handler acceptance, wrong admin credential or backend outage | Check the rule target, handler health and authenticated forward history | Restore the handoff and keep the original identity on provider retry; capture alone is not acceptance |
 
 Health is liveness, not a target-connectivity or backlog-readiness check. The
 listener can be healthy while target delivery is failing. The runtime suppresses
@@ -121,4 +121,5 @@ retry timing and budget, HTTP 429/500 recovery across restart, permanent failure
 remaining in review, and a process killed after target acceptance but before
 local delivery commit. The target mock verifies key reuse without a second
 ticket. Run the full required suite before release. These are component
-contracts, not real-vendor certification or Compose deployment acceptance.
+contracts, not real-vendor certification. The required Compose smoke separately checks the
+running edge-to-HookScope-to-handler-to-support path.

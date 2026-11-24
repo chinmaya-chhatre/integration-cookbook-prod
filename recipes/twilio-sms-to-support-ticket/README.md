@@ -2,107 +2,158 @@
 
 ## Problem and scope
 
-Turn an inbound SMS into a support ticket without losing messages during a target outage or creating duplicate tickets after redelivery. This recipe designs the boundary between Twilio, HookScope, a ticket handler and a generic support API mock. The signed ingress, durable outbox, HTTP runtime and retry worker are implemented; deployment integration remains in progress. It does not claim compatibility with a particular support vendor.
-
-Inbound messaging webhooks carry `application/x-www-form-urlencoded` fields, including `MessageSid`, `AccountSid`, `From`, `To` and `Body`. They are not JSON. Parse form encoding once, preserving blank values and Unicode; do not trim, normalize or re-encode values before signature verification. Reject ambiguous duplicate parameter names rather than silently choosing a value. Unknown fields must participate in verification.
+Turn a signed, form-encoded SMS into one support ticket, even after provider
+redelivery, target outages or process restarts. This local demonstration runs
+a TwiML edge, pinned HookScope, a durable handler and a vendor-neutral support
+API mock. It is not a Jira integration or vendor certification.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-    T[Twilio inbound SMS] --> P[HTTPS reverse proxy]
-    P --> H[HookScope signature boundary]
-    H --> Q[Durable delivery record]
-    Q --> W[Ticket handler]
+    T[Signed SMS] --> E[TwiML edge]
+    E --> H[HookScope capture and forwarding]
+    H --> W[Signed handler and persistent outbox]
     W --> S[Support API mock]
-    W --> D[Dead letter and replay]
+    W --> D[Persistent retry state]
 ```
 
-The receiving boundary validates the request before accepting work. It returns a successful TwiML response, such as `<Response/>`, only after durable acceptance. An empty response sends no automatic SMS reply. Authentication failures must not create tickets or enqueue work. A failure before durable acceptance returns an error, with provider retry behavior configured and verified separately.
-
-Durable acceptance, retry storage and safe replay are requirements for the implementation, not guarantees of this architecture page. If the pinned HookScope version cannot satisfy a requirement, the subsequent configuration and handler work must supply it explicitly before go-live.
-
-## Signature and proxy boundary
-
-Twilio signs the exact externally configured webhook URL, including its scheme, host, path and query string, together with the form parameters using the account auth token. Validate `X-Twilio-Signature` with a maintained Twilio validator or a tested equivalent. A proxy that changes HTTPS to HTTP, strips a path prefix or rewrites the host can make an authentic request fail verification.
-
-Configure the public webhook URL explicitly. Do not construct it from arbitrary client-provided forwarding headers. If trusted proxy metadata is used, restrict direct ingress and define which proxy can set those headers. Preserve the original form body and content type through the proxy. Outbound forwarding to the ticket handler requires its own authentication; the handler must not attempt to validate the original Twilio signature against its internal URL.
-
-Keep the auth token in secret configuration. Never log it, signatures, full phone numbers or SMS bodies. Correlate deliveries with `MessageSid` and a request identifier; redact personal data in diagnostic examples.
-
-## Delivery sequence
+HookScope validates the original signature and forwards the original form and
+signature to the private handler. The handler independently validates against
+the fixed public URL and commits an outbox record before returning success.
+The edge polls the authenticated forward-history API for a successful
+`inbound-sms` forward to the configured handler, then returns empty TwiML.
+A HookScope capture receipt alone is insufficient for acknowledgement.
 
 ```mermaid
 sequenceDiagram
-    participant T as Twilio
-    participant H as HookScope ingress
-    participant W as Ticket handler
+    participant T as Sender
+    participant E as TwiML edge
+    participant H as HookScope
+    participant W as Handler
     participant S as Support mock
-    T->>H: Signed form POST to public URL
-    H->>H: Validate signature and persist delivery
-    H-->>T: Successful empty TwiML
-    H->>W: Authenticated delivery with MessageSid
-    W->>S: Create ticket with stable idempotency key
-    alt Ticket accepted or already exists
-        S-->>W: Ticket identifier
-        W-->>H: Delivery complete
-    else Rate limit or transient failure
-        S-->>W: 429 or 500
-        W-->>H: Retryable failure
-        H->>H: Bounded retry then dead letter
-    end
+    T->>E: Signed form
+    E->>H: Original bytes and fixed public URL headers
+    H->>W: Raw form and original signature
+    W->>W: Verify and persist outbox
+    W-->>H: Durable acceptance
+    E->>H: Read forward result
+    H-->>E: Handler accepted
+    E-->>T: Empty TwiML
+    W->>S: Ticket with stable idempotency key
+    S-->>W: Accepted or already exists
 ```
 
-## Mapping and delivery policy
+The support request is asynchronous. A provider 200 means durable acceptance,
+not completed ticket creation. If the handler cannot confirm persistence within
+the edge's bounded wait, the edge returns 503. HookScope may still finish later;
+provider redelivery keeps the same identity and is safe. Configure provider
+retry behavior separately.
 
-| Source | Target use |
+## Run the synthetic demonstration
+
+From the repository root, with Docker Compose available:
+
+```sh
+make up RECIPE=twilio-sms-to-support-ticket
+docker compose -f docker-compose.base.yml -f recipes/twilio-sms-to-support-ticket/docker-compose.yml exec -T ingress python smoke.py
+```
+
+The smoke command sends a synthetic signed form through the edge, verifies one
+ticket at the support mock, repeats the same identity, and rejects a bad
+signature. Successful output is:
+
+```text
+SMS stack smoke passed: signed delivery, invalid signature and duplicate checks
+```
+
+The local edge is `http://127.0.0.1:8081/hooks/twilio` (override `SMS_PORT`).
+Its configured signed URL is `https://sms.example.test/hooks/twilio`, an
+illustrative URL, not a deployed HTTPS service. The smoke signs that fixed URL
+while sending locally. Do not configure a live number with this example.
+
+The HookScope dashboard is `http://127.0.0.1:8000`; its demonstration password
+is `cookbook-sms-admin` (any Basic username). All example credentials in
+`recipe.env` and Compose are public, synthetic values. Replace them through
+secret configuration before any deployment with real data.
+
+Only the edge and dashboard publish loopback ports. Handler and support ports
+remain private. Named volumes preserve HookScope captures, handler state and
+support-mock idempotency across container replacement. To stop without deleting
+state:
+
+```sh
+docker compose -f docker-compose.base.yml -f recipes/twilio-sms-to-support-ticket/docker-compose.yml stop
+```
+
+Do not use `make down` for recovery: it deliberately removes volumes.
+The support inspection endpoint `/_mock/tickets` requires its bearer credential
+and is for synthetic testing only. It is not a production administration API.
+
+## Fixed URL and trust boundary
+
+Twilio signs the exact public HTTPS URL, including host, path and query, plus
+all form parameters. The edge requires `/hooks/twilio` and replaces Host and
+X-Forwarded-Proto for its private HookScope connection using trusted configuration.
+Client Host or forwarding headers never select the signed URL. HookScope's pinned
+proxy-aware server reconstructs that configured public URL. Keep its backend
+network private; do not expose the trusted-proxy listener directly.
+
+The handler verifies the original signature against the same explicit
+`TWILIO_PUBLIC_URL`, never its internal URL. Unknown form fields participate in
+verification. Duplicate parameters, malformed encoding and media messages are
+rejected. Blank SMS bodies, Unicode and literal plus signs are preserved.
+Forwarding headers alone cannot bypass the handler's signature check.
+
+For a real TLS reverse proxy, preserve the original body and query and route
+`/hooks/twilio` to the edge. Set the exact external HTTPS URL in the edge and
+handler, and the same Twilio auth token in HookScope and the handler. If a query
+is configured, put the identical query on `SMS_HANDLER_URL` and the rule's
+`target_url` too, because the handler checks it. A query mismatch fails closed.
+Never fix signature errors by disabling verification.
+
+The edge uses a fixed internal HookScope URL, refuses redirects and sends its
+administrator credential only to forward-history reads. Original credentials
+from the incoming request are not copied. Each backend HTTP request has a
+half-second timeout; polling has a two-second budget plus its final request.
+Health endpoints report liveness, not target delivery or backlog readiness.
+
+## Mapping and delivery
+
+| Source | Ticket field |
 | --- | --- |
-| AccountSid and MessageSid | Durable deduplication key scoped to the sending account |
-| Body | Ticket description, treated as untrusted text |
-| From | Restricted contact field, subject to retention policy |
-| To | Support destination or routing key |
-| MessageSid | External reference and correlation identifier |
+| AccountSid and MessageSid | Account-scoped external reference and idempotency key |
+| Body | Description, preserved as untrusted text |
+| From | Restricted contact |
+| To | Support destination |
+| MessageSid | Summary and correlation |
 
-Create one ticket per inbound message, not one per phone number. A new message from the same sender creates another ticket. Conversation threading and outbound replies are outside this recipe. Attachments are outside the initial SMS scope; do not fetch arbitrary media URLs.
+New identities create separate tickets, including messages from the same
+sender. Repeated identities with identical content reuse the same outbox and
+target ticket. Reusing an identity with changed content returns conflict.
+Conversation threading, media downloads and outbound SMS are outside scope.
 
-Persist the mapping from account/message identity to ticket identifier. Concurrent deliveries require atomic claims or a unique constraint. Pass a stable target idempotency key where supported. If the target accepts a request but the response is lost, reconcile by external reference before creating again. Local deduplication alone cannot guarantee exactly-once creation across that failure window.
+The `inbound-sms` HookScope rule forwards raw forms without a JSON event-type
+filter. Invalid signatures do not match. Its five attempts protect handoff to
+the durable handler. The handler worker separately persists its own five-attempt
+budget for transport errors, 408/425/429 and 5xx; permanent errors enter review.
+The target must retain idempotency across response loss and restarts. The mock
+does so in its own SQLite volume, with a bearer credential and the same stable
+external reference.
 
-Honor target rate limits with bounded backoff and jitter. Retry transient transport failures, 429 and selected 5xx responses. Route permanent validation failures to operator review. Preserve the same identity during replay; never manufacture a new message identity to bypass deduplication. Retain failed work durably with a documented retention period and access controls.
+See [Runtime](RUNTIME.md), [Scheduled delivery](WORKER.md),
+[HTTP delivery](HTTP-DELIVERY.md), [Testing](TESTING.md) and
+[Troubleshooting](TROUBLESHOOTING.md) for component contracts and recovery.
 
-## Acceptance criteria for the runnable recipe
+## Validation and remaining scope
 
-- A valid signed form creates one ticket with Unicode and blank fields preserved.
-- A modified body, wrong token or mismatched public URL is rejected before side effects.
-- Trusted proxy configuration validates the public URL while internal URL reconstruction fails predictably.
-- Duplicate and concurrent deliveries create one ticket; different message identities remain independent.
-- Target 429/500, response loss after acceptance, restart and outage replay retain identity and avoid duplicate creation.
-- Required integration tests execute with the pinned HookScope dependency and local mocks.
+The Compose base builds HookScope at
+`b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`, matching the test dependency.
+CI requires Compose validation, container builds and the running signed stack
+smoke, as well as the full suites and completed-recipe matrix. There is no
+moving-head dependency in this demonstration.
 
-## Implementation status
-
-The core is packaged in an unprivileged container with an HTTP listener and retry worker. See [Runtime](RUNTIME.md) for configuration, routing and shutdown. Signed ingress, persistence, retry and HTTP tests execute in the full suite. The recipe remains marked `.wip`: deployment wiring, a compatible support mock and customer go-live material are still required. `make up` is not an end-to-end acceptance test.
-
-## Configuration contract
-
-Merge `docker-compose.base.yml` followed by this recipe's `docker-compose.yml`, from the repository root. Run `make config RECIPE=twilio-sms-to-support-ticket` to validate the configuration. Once the handler is implemented, `make up RECIPE=twilio-sms-to-support-ticket` will select this recipe's rules automatically.
-
-The `inbound-sms` rule forwards raw Twilio form bytes to `http://handler:8080/twilio/sms`. It deliberately has no JSON transform or event-type filter: form bodies have no JSON `type`. Five total attempts use exponential delays starting at two seconds, capped at sixty seconds. Invalid or unsigned events do not match; a missing configured secret is unsafe because HookScope permits `no_secret` events. Always supply `HOOKSCOPE_SECRET_TWILIO` through secret configuration; `make env` supplies demonstration secrets only.
-
-The handler has no published port, persists its deduplication state at `/data/tickets.sqlite3`, and waits for the support mock. The mock uses the existing Jira-shaped issue API as a generic ticket stand-in, at `http://support:9000/rest/api/3/issue`. Neither service is exposed on a host port. HookScope waits for the handler's `/healthz`.
-
-`TWILIO_PUBLIC_URL` defines the handler signature boundary, not a HookScope setting. The runtime requires an explicit HTTPS URL and `TWILIO_AUTH_TOKEN`; the demonstration environment is not sufficient to start it. The pinned HookScope dependency reconstructs the incoming URL and has no explicit public-URL override. Its current ingress also does not implement this page's TwiML acceptance contract. Do not connect a live Twilio number yet. Core implementation must supply a trusted URL/signature boundary, authenticated internal delivery, duplicate-parameter rejection and durable acceptance before declaring the full recipe runnable. Never solve URL mismatches by disabling signature checks.
-
-CI keeps HookScope pinned to `b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`. The shared Compose base currently builds production main; do not treat that development stack as evidence of pinned-version behavior. Configuration tests exercise the actual pinned rules parser and verify that form payloads match without a JSON event type. Full-suite CI includes these tests while the completed-recipe matrix continues to exclude this unfinished recipe.
-
-## Core transform
-
-`transform.py` provides `parse_message(raw_bytes)` and `ticket_payload(message)`.
-Call it only after signature verification against the original public URL and bytes.
-It preserves Unicode, blank SMS bodies and literal plus signs, rejects duplicate
-parameter names (including encoded aliases), malformed encoding, invalid message
-identities and media messages. Payloads use an account-scoped external reference.
-This is a pure transform, not the HTTP handler or a durable delivery guarantee.
-The [runtime](RUNTIME.md) packages this transform with the ingress and worker.
-The Compose deployment still needs integration wiring, so `make up` remains
-unsupported. Signature-boundary, persistence and delivery integration tests must
-be completed before removing `.wip` or connecting a live number.
+The recipe retains `.wip` until its customer handover material is complete.
+The local stack is executable; a live deployment still needs actual TLS,
+secret management, network controls, retention, rate-limit sizing and verified
+provider retry settings. Synthetic tests do not certify a real support vendor.
