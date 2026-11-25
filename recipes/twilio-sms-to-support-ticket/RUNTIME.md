@@ -35,8 +35,8 @@ The [demonstration stack](README.md#run-the-synthetic-demonstration) now supplie
 a TwiML edge and a compatible persistent support mock. The edge sends the fixed
 public URL headers to pinned HookScope and confirms a successful handler forward
 before acknowledgement. Use the edge's published port, not HookScope's raw receipt
-endpoint, for provider requests. The recipe retains `.wip` pending customer
-handover material. The public example URL and credentials are synthetic; a live
+endpoint, for provider requests. Use the [customer handover pack](CUSTOMER-PACK.md)
+to record deployment acceptance. The public example URL and credentials are synthetic; a live
 deployment requires actual TLS, private backend networking and secret injection.
 
 See [Troubleshooting](TROUBLESHOOTING.md) for the read-only aggregate health

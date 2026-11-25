@@ -27,5 +27,5 @@ Tests cover persisted due times, restart recovery, retry exhaustion, transport
 loss, permanent failures and batch bounds. The worker is executable core code;
 the [runtime](RUNTIME.md) packages it with the inbound HTTP server. The [Compose demonstration](README.md#run-the-synthetic-demonstration)
 now includes the edge, pinned HookScope and a compatible persistent support mock.
-The recipe retains `.wip` until customer handover is complete. Use the read-only checks in [Troubleshooting](TROUBLESHOOTING.md)
+The [customer handover pack](CUSTOMER-PACK.md) defines actual deployment acceptance gates. Use the read-only checks in [Troubleshooting](TROUBLESHOOTING.md)
 to distinguish due backlog from scheduled retries before recovery.

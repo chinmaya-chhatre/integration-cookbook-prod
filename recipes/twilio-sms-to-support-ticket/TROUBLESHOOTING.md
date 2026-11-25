@@ -12,7 +12,8 @@ The [Compose demonstration](README.md#run-the-synthetic-demonstration) now runs
 the edge, pinned HookScope, handler and persistent support mock. Run its signed
 smoke check, not just `make config`. The edge confirms handler acceptance before
 returning TwiML; a HookScope capture receipt alone does not prove persistence.
-Keep `.wip` until customer handover is complete. The checked-in credentials and
+Use the [customer handover pack](CUSTOMER-PACK.md) for actual deployment acceptance.
+The checked-in credentials and
 HTTPS URL are synthetic and must not be used with a live number.
 
 ## Diagnose by symptom
@@ -113,7 +114,7 @@ promise dashboard alerts or quote proposed log lines as observed output.
 Run these tests from the repository root:
 
 ```sh
-python -m pytest tests/test_twilio_diagnostics.py tests/test_twilio_worker.py tests/test_twilio_runtime.py
+python -m pytest tests/test_twilio_diagnostics.py tests/test_twilio_worker.py recipes/twilio-sms-to-support-ticket/tests/test_twilio_runtime.py
 ```
 
 They cover aggregate redaction, read-only access and failure reporting, persisted

@@ -144,8 +144,10 @@ external reference.
 See [Runtime](RUNTIME.md), [Scheduled delivery](WORKER.md),
 [HTTP delivery](HTTP-DELIVERY.md), [Testing](TESTING.md) and
 [Troubleshooting](TROUBLESHOOTING.md) for component contracts and recovery.
+The [customer handover pack](CUSTOMER-PACK.md) supplies the FAQ, discovery
+questions, go-live checklist and acceptance-record requirements.
 
-## Validation and remaining scope
+## Validation and customer acceptance
 
 The Compose base builds HookScope at
 `b4e012c304ea69ca29fd544ab0ab2864e5cf11f6`, matching the test dependency.
@@ -153,7 +155,14 @@ CI requires Compose validation, container builds and the running signed stack
 smoke, as well as the full suites and completed-recipe matrix. There is no
 moving-head dependency in this demonstration.
 
-The recipe retains `.wip` until its customer handover material is complete.
-The local stack is executable; a live deployment still needs actual TLS,
+The completed recipe runs its signed HTTP delivery and recovery tests in the
+per-recipe CI matrix. Run them with:
+
+```sh
+make test RECIPE=twilio-sms-to-support-ticket
+```
+
+The local stack and customer handover material are complete. A live deployment
+still needs actual TLS,
 secret management, network controls, retention, rate-limit sizing and verified
 provider retry settings. Synthetic tests do not certify a real support vendor.

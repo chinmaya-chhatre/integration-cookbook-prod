@@ -3,7 +3,8 @@
 Run from the repository root:
 
 ```sh
-python -m pytest tests/test_twilio_happy_path.py tests/test_twilio_runtime.py
+make test RECIPE=twilio-sms-to-support-ticket
+python -m pytest tests/test_twilio_happy_path.py
 ```
 
 The fixture tests independently check the HMAC over the exact public HTTPS URL
@@ -28,9 +29,17 @@ target outage. HTTP tests unset proxy variables only for their local servers.
 The complete test suite in CI also installs the pinned HookScope dependency;
 recipe configuration tests validate its rules parser.
 
-These checks validate the runtime and target HTTP contract. They do not certify
-a support vendor or demonstrate a working Compose deployment. The recipe stays
-marked `.wip` until deployment integration and customer handover are complete.
+The recipe-local suite runs in the completed-recipe CI matrix and in the full
+suite, without duplicate test modules. It validates the runtime and target HTTP
+contract. Full-suite tests also cover the parser, signed ingress, outbox,
+scheduler, diagnostics and edge failure handling.
+
+The mandatory Compose job separately builds and starts the pinned four-service
+stack and executes its signed smoke command: invalid signature rejection, durable
+acceptance and one target ticket after duplicate delivery. See the
+[demonstration commands](README.md#run-the-synthetic-demonstration).
+Process tests and Compose smoke provide different evidence; neither certifies
+a support vendor or completes the [customer acceptance gates](CUSTOMER-PACK.md).
 
 ## Failure recovery through the running process
 
@@ -52,4 +61,5 @@ stable-key contract or a reconciliation mechanism.
 Earlier unit tests retain coverage for concurrent duplicates, conflicting
 identities, out-of-order independent messages, five-attempt exhaustion and
 persisted due times. These runtime checks add real sockets and process
-boundaries. They do not establish Compose deployment readiness; `.wip` remains.
+boundaries. The separate Compose check proves the synthetic stack runs;
+actual provider/target deployment readiness still requires customer acceptance.

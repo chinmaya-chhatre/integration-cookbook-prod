@@ -55,4 +55,11 @@ def test_twilio_stack_is_private_and_retains_ticket_state():
     assert services["ingress"]["depends_on"]["hookscope"]["condition"] == "service_healthy"
     assert services["hookscope"]["environment"]["HOOKSCOPE_ADMIN_PASSWORD"] == "cookbook-sms-admin"
     assert "ticket-state" in config["volumes"]
-    assert (RECIPE / ".wip").exists()
+    assert not (RECIPE / ".wip").exists()
+    assert (RECIPE / "tests" / "test_twilio_runtime.py").is_file()
+
+
+def test_twilio_is_in_the_completed_recipe_matrix():
+    from scripts.list_recipes import recipes
+
+    assert RECIPE.name in recipes(ROOT)

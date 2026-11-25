@@ -21,7 +21,7 @@ import pytest
 from common import signing
 from common.fixtures import SECRETS, twilio_inbound_sms
 
-ROOT = Path(__file__).parents[1] / "recipes/twilio-sms-to-support-ticket"
+ROOT = Path(__file__).parents[1]
 PUBLIC = "https://public.example.test/hooks/twilio"
 
 
