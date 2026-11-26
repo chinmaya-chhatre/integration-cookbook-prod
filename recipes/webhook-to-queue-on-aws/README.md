@@ -3,11 +3,11 @@
 A customer wants webhook responses to remain quick while a slow business system
 is unavailable, without acknowledging work that has not reached durable storage.
 
-**Architecture specification.** This folder describes the queue handoff and worker
-contracts. It does not yet contain a runnable stack, handler, worker, Terraform
-module or executable acceptance tests. Its `.wip` marker keeps it outside the
-completed-recipe test matrix. Existing recipe and documentation checks still run.
-No cloud resources are created by this document.
+**Local configuration demonstration.** The Compose stack runs a signed acknowledgement
+edge, the pinned HookScope receiver, an SQS bridge, LocalStack, a polling worker
+and a persistent idempotent HTTP target. The `.wip` marker remains while the
+recipe's full happy-path, failure-mode and customer handover work is developed.
+CI runs the queue stack smoke checks separately from the completed-recipe matrix.
 
 ## Problem and scope
 
@@ -219,11 +219,11 @@ all of them. Correlation logs should contain identifiers, outcomes and timings,
 not bodies, signatures, tokens or full queue receipt handles.
 
 The local architecture uses LocalStack instead of a live AWS account and a durable
-idempotent target mock. An infrastructure module must pass Terraform format and
-validation checks in CI before it is considered usable. No Terraform module or
-deployment command is supplied here; validation and LocalStack cannot establish
-live-account IAM, network, encryption, durability, quota or cost behavior.
-Infrastructure is never applied by the recipe's validation workflow.
+idempotent target mock. The included queue module passes Terraform format and validation checks in CI.
+Its scope is the queue and dead-letter configuration only. Real deployment also
+requires IAM, private networking, service hosting and secret management.
+Validation and LocalStack cannot establish live-account durability, quota or cost
+behavior. Infrastructure is never applied by the recipe's validation workflow.
 
 ## Acceptance evidence required for an executable recipe
 
@@ -242,7 +242,9 @@ Infrastructure is never applied by the recipe's validation workflow.
 - Full Python suites, a nonempty per-recipe suite, runnable local stack checks and
   Terraform validation provide evidence before the design is marked runnable.
 
-These are acceptance requirements, not claims that the implementation already exists.
+The local smoke checks cover queue-confirmed acknowledgement, rejected signatures,
+queue outages, duplicate queue copies, processing, deletion, and service restart.
+The broader failure-injection and recovery acceptance matrix remains unfinished.
 
 ## AWS references
 
@@ -255,3 +257,67 @@ The queue semantics above follow these primary references, reviewed November 25,
 
 The edge/bridge/ledger choices are this recipe's design decisions, not AWS-provided
 end-to-end delivery guarantees.
+
+
+## Run the local stack
+
+From the repository root with Docker Compose v2 available, select the rules file:
+
+```sh
+export HOOKSCOPE_RULES_FILE=./recipes/webhook-to-queue-on-aws/rules.json
+```
+
+```sh
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml up --build --wait -d
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml stop worker
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml start worker
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py completed
+```
+
+The recipe extends the shared base Compose service. The final private overlay
+removes the shared HookScope port mapping. The project directory flag makes
+build and bind-mount paths resolve from the repository root.
+Only the edge is published, at `http://127.0.0.1:8082/hooks/generic`. Set
+`QUEUE_PORT` to choose another loopback port. Administration, bridge, LocalStack,
+worker health, and the target have container-network access only.
+The checked-in credentials are public synthetic demonstration values.
+
+The worker is deliberately stopped for the first smoke check. That check reads
+the queued message, releases its receipt and enqueues an identical copy. The
+second check waits for one durable target record and both queue copies to be
+deleted. The namespace is `cookbook`. HookScope uses its fixed
+`b4e012c304ea69ca29fd544ab0ab2864e5cf11f6` dependency.
+
+The SQS visibility timeout is 30 seconds, source retention is four days, DLQ
+retention is fourteen days, and redrive occurs after five receives. The bridge
+and worker use bounded SDK calls without implicit SDK retries. The worker
+uses a three-second target timeout. SQLite serializes processing of a business
+key, and the target independently deduplicates the same key and body digest.
+Permanent failures stay undeleted with a blocked ledger outcome. Conflicts and
+invalid messages remain undeleted for redrive. Operators must inspect the DLQ.
+The worker stops new receives during shutdown and allows its current call to
+finish. Runtime diagnostics omit bodies, credentials and receipt handles.
+
+Named volumes retain captures, outcome evidence and mock target records across
+service restarts. LocalStack's queue storage is ephemeral across container
+replacement in this demonstration. This limits local durability claims. Never
+restart or replace LocalStack while using queue contents as the only copy of
+work that matters. The real SQS durability boundary requires separate AWS
+deployment validation. To intentionally remove all local demonstration state:
+
+```sh
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml down -v
+```
+
+Validate the Terraform module without applying infrastructure:
+
+```sh
+cd recipes/webhook-to-queue-on-aws/terraform
+terraform fmt -check
+terraform init -backend=false -input=false
+terraform validate
+```
+
+CI requires these checks plus the Docker Compose lifecycle and signed stack
+smoke checks. No AWS account credentials or Terraform apply are used.

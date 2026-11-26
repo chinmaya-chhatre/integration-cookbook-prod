@@ -1,0 +1,14 @@
+{
+  "rules": [
+    {
+      "name": "queue-job",
+      "source": "generic",
+      "target_url": "http://bridge:8080/enqueue",
+      "retry": {
+        "attempts": 3,
+        "backoff_seconds": 0.2,
+        "max_backoff_seconds": 1
+      }
+    }
+  ]
+}

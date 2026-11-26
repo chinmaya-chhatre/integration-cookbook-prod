@@ -131,3 +131,51 @@ jobs:
       - run: make test RECIPE=${{ matrix.recipe }}
         env:
           PYTHONPATH: ${{ github.workspace }}/hookscope-src
+
+  queue-stack:
+    env:
+      HOOKSCOPE_RULES_FILE: ./recipes/webhook-to-queue-on-aws/rules.json
+    name: queue stack and Terraform
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+      - name: Terraform format and validation only
+        working-directory: recipes/webhook-to-queue-on-aws/terraform
+        run: |
+          terraform fmt -check
+          terraform init -backend=false -input=false
+          terraform validate
+      - name: Require private service configuration
+        run: >-
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml config --format json |
+          python -c 'import json,sys; s=json.load(sys.stdin)["services"]; assert all(not v.get("ports") for k,v in s.items() if k != "edge")'
+      - name: Start private LocalStack queue demonstration
+        run: docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml up --build --wait -d
+      - name: Confirm queue acceptance before business processing
+        run: |
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml stop worker
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml start worker
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py completed
+      - name: Verify persistent deduplication after worker and target restart
+        run: |
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml restart worker target
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml up --wait -d
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml stop worker
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml start worker
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py completed
+      - name: Queue outage cannot acknowledge a producer
+        run: |
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml stop localstack
+          docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py queue-down
+      - name: Stop queue demonstration
+        if: always()
+        run: docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml down -v

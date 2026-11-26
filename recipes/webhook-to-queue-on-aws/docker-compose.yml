@@ -1,0 +1,79 @@
+# Run from the repository root with --project-directory . as documented.
+name: cookbook-queue
+x-runtime: &runtime
+  build:
+    context: .
+    dockerfile: recipes/webhook-to-queue-on-aws/Dockerfile
+  env_file: ./recipes/webhook-to-queue-on-aws/recipe.env
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+
+services:
+  edge:
+    <<: *runtime
+    command: ["edge"]
+    ports:
+      - "127.0.0.1:${QUEUE_PORT:-8082}:8080"
+    depends_on:
+      hookscope:
+        condition: service_healthy
+
+  hookscope:
+    environment:
+      HOOKSCOPE_SECRET_GENERIC: cookbook-generic-secret
+      HOOKSCOPE_ADMIN_PASSWORD: cookbook-queue-admin
+    depends_on:
+      bridge:
+        condition: service_healthy
+
+  localstack:
+    image: localstack/localstack:3.8.1
+    environment:
+      SERVICES: sqs
+      LOCALSTACK_HOST: localstack:4566
+      SQS_ENDPOINT_STRATEGY: path
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues >/dev/null"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+
+  bootstrap:
+    <<: *runtime
+    command: ["bootstrap"]
+    healthcheck:
+      disable: true
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+  bridge:
+    <<: *runtime
+    command: ["bridge"]
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+
+  target:
+    <<: *runtime
+    command: ["target"]
+    volumes:
+      - queue-target:/data
+
+  worker:
+    <<: *runtime
+    command: ["worker"]
+    volumes:
+      - queue-ledger:/data
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+      target:
+        condition: service_healthy
+
+volumes:
+  queue-target:
+  queue-ledger:
