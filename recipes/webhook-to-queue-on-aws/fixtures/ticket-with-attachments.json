@@ -1,0 +1,29 @@
+{
+  "event_id": "support-job-1003",
+  "kind": "support.job",
+  "data": {
+    "ticket_id": "SUP-1003",
+    "account_id": "acct_demo_84",
+    "created_at": "2026-11-27T14:37:00Z",
+    "priority": "low",
+    "requester": {
+      "name": "Sam Lee",
+      "email": "sam@example.com"
+    },
+    "subject": "Import report attached",
+    "message": "Please review the rows with validation errors.",
+    "attachments": [
+      {
+        "id": "attachment-1",
+        "filename": "import-report.csv",
+        "content_type": "text/csv",
+        "size_bytes": 2048,
+        "url": "https://files.example.com/demo/import-report.csv"
+      }
+    ],
+    "metadata": {
+      "failed_rows": 7,
+      "total_rows": 250
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "event_id": "support-job-1001",
+  "kind": "support.job",
+  "data": {
+    "ticket_id": "SUP-1001",
+    "account_id": "acct_demo_42",
+    "created_at": "2026-11-27T14:35:00Z",
+    "priority": "normal",
+    "requester": {
+      "name": "Alex Taylor",
+      "email": "alex@example.com"
+    },
+    "subject": "Invoice total needs review",
+    "message": "Invoice INV-2042 includes two additional seats.",
+    "tags": [
+      "billing",
+      "invoice"
+    ],
+    "assignee": null
+  }
+}

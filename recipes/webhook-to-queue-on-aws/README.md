@@ -342,3 +342,35 @@ terraform validate
 
 CI requires these checks plus the Docker Compose lifecycle and signed stack
 smoke checks. No AWS account credentials or Terraform apply are used.
+
+## Signed support-job tests
+
+The `fixtures/` directory contains three synthetic generic HMAC events with
+reserved example addresses. They represent a billing ticket, a Unicode escalation
+and a ticket with attachment metadata. Each fixture is signed over its exact
+UTF-8 file bytes. Nested data, empty strings, nulls, booleans and attachment
+metadata must reach the target intact.
+
+With the pinned HookScope source and its dependencies installed, run the recipe
+suite from the repository root:
+
+```sh
+make test RECIPE=webhook-to-queue-on-aws
+```
+
+Each case uses the public acknowledgement edge, HookScope's actual signature
+verification and forwarding handlers, the bridge, the worker loop and the
+durable target handler. An SQS transport double lets the test pause processing
+until after acknowledgement and inspect the envelope and current receipt.
+The checks require the exact original-body digest, namespaced business key,
+target completion proof and committed worker/target records.
+
+CI also sends the same fixture files through the running Docker Compose stack
+and LocalStack, then checks every mapped target record and an empty source queue.
+After starting the private stack, run that check with:
+
+```sh
+docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py happy-paths
+```
+
+Attachment URLs are carried as metadata. The worker does not fetch their contents.

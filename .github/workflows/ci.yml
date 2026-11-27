@@ -172,6 +172,8 @@ jobs:
           docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py
           docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml start worker
           docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py completed
+      - name: Verify signed support job fixtures through LocalStack
+        run: docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml exec -T edge python smoke.py happy-paths
       - name: Queue outage cannot acknowledge a producer
         run: |
           docker compose --project-directory . -f docker-compose.base.yml -f recipes/webhook-to-queue-on-aws/docker-compose.yml -f recipes/webhook-to-queue-on-aws/private.yml stop localstack

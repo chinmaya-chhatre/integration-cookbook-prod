@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 import httpx
 from queue_recipe.queue import client, queue_url
@@ -90,8 +91,54 @@ def completed():
         print("worker delivered once and deleted all current receipts")
 
 
+def happy_paths():
+    """Check realistic signed fixtures through the running LocalStack stack."""
+    expected = {}
+    with httpx.Client(timeout=8, trust_env=False) as http:
+        for fixture in sorted(Path(__file__).with_name("fixtures").glob("*.json")):
+            raw = fixture.read_bytes()
+            job = json.loads(raw)
+            digest = hashlib.sha256(raw).hexdigest()
+            signature = hmac.new(os.environ["QUEUE_SOURCE_SECRET"].encode(), raw, hashlib.sha256).hexdigest()
+            response = http.post(
+                "http://edge:8080/hooks/generic", content=raw, headers={"X-Signature": signature}
+            )
+            assert response.status_code == 202
+            assert response.json()["queued"] is True
+            capture_id = response.json()["capture_id"]
+            assert type(capture_id) is int and capture_id > 0
+            expected["cookbook:" + job["event_id"]] = {
+                "external_reference": "cookbook:" + job["event_id"],
+                "body_sha256": digest,
+                "data": job["data"],
+            }
+        assert len(expected) == 3
+        for _ in range(100):
+            response = http.get(
+                "http://target:8080/jobs",
+                headers={"Authorization": "Bearer " + os.environ["QUEUE_TARGET_TOKEN"]},
+            )
+            response.raise_for_status()
+            actual = {item["external_reference"]: item for item in response.json()}
+            if all(actual.get(key) == value for key, value in expected.items()):
+                break
+            time.sleep(0.1)
+        assert all(actual.get(key) == value for key, value in expected.items())
+        sqs = client()
+        url = queue_url(sqs)
+        for _ in range(100):
+            attrs = sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])["Attributes"]
+            if attrs["ApproximateNumberOfMessages"] == attrs["ApproximateNumberOfMessagesNotVisible"] == "0":
+                break
+            time.sleep(0.1)
+        assert attrs["ApproximateNumberOfMessages"] == attrs["ApproximateNumberOfMessagesNotVisible"] == "0"
+        print("three signed support fixtures retained exact data and digest, completed and emptied the queue")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "completed":
+    if len(sys.argv) > 1 and sys.argv[1] == "happy-paths":
+        happy_paths()
+    elif len(sys.argv) > 1 and sys.argv[1] == "completed":
         completed()
     else:
         main()
