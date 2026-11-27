@@ -5,12 +5,22 @@ import hashlib
 import hmac
 import json
 import re
+from typing import TypeAlias, TypedDict
+
+JSONValue: TypeAlias = "None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]"
+
+
+class TargetJob(TypedDict):
+    external_reference: str
+    body_sha256: str
+    data: dict[str, JSONValue]
+
 
 MAX_BODY = 64 * 1024
 MAX_ENVELOPE = 128 * 1024
 
 
-def unique_object(pairs):
+def unique_object(pairs: list[tuple[str, JSONValue]]) -> dict[str, JSONValue]:
     result = {}
     for name, value in pairs:
         if name in result:
@@ -19,7 +29,7 @@ def unique_object(pairs):
     return result
 
 
-def invalid_number(_):
+def invalid_number(_: str) -> None:
     raise ValueError("non-finite number")
 
 
@@ -84,3 +94,9 @@ def unpack(message: str, namespace: str) -> tuple[str, str, dict]:
     if value.get("body_sha256") != digest or value.get("event_id") != job["event_id"]:
         raise ValueError("envelope integrity")
     return namespace + ":" + job["event_id"], digest, job["data"]
+
+
+def target_job(message: str, namespace: str) -> TargetJob:
+    """Map a verified envelope to a target job without changing its business identity."""
+    key, digest, data = unpack(message, namespace)
+    return {"external_reference": key, "body_sha256": digest, "data": data}

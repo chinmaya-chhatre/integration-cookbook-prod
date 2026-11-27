@@ -261,6 +261,27 @@ end-to-end delivery guarantees.
 
 ## Run the local stack
 
+### Worker code
+
+The worker exposes small functions with typed payloads and outcomes:
+
+| Function | Responsibility |
+|---|---|
+| `target_job` | Validate the envelope and map it to the target's external reference, original-byte digest and nested data |
+| `target_outcome` | Accept only HTTP 200/201 with an exact completion proof; classify other responses as retryable or blocked |
+| `process` | Serialize identity checks and persist a completed or blocked outcome in one ledger transaction |
+| `handle_message` | Delete the current receipt only after completion is committed; otherwise release it with bounded backoff |
+
+The send callback and queue protocol allow the processing rules to be tested
+without AWS credentials or a running HTTP server. Missing or malformed completion
+proof remains retryable. A failed queue deletion can be retried with a new receipt
+without repeating the target call. Every SQLite transaction commits or rolls back
+before its connection is closed, including when processing raises an exception.
+
+Retry delay is exponential with a 30-second base cap and zero to two seconds of
+jitter. Missing or malformed receive-count metadata uses the first retry delay.
+This delay does not change the configured maximum receive count or DLQ policy.
+
 From the repository root with Docker Compose v2 available, select the rules file:
 
 ```sh

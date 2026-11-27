@@ -2,11 +2,14 @@
 
 import json
 import sqlite3
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+
+from .contract import TargetJob
 
 
 class Ledger:
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.path = path
         with self.transaction() as conn:
             conn.execute(
@@ -15,19 +18,19 @@ class Ledger:
             )
 
     @contextmanager
-    def transaction(self):
-        with sqlite3.connect(self.path, timeout=5) as conn:
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.path, timeout=5)) as conn, conn:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
             yield conn
 
     @staticmethod
-    def record(conn, key: str, digest: str, state: str, payload: dict):
+    def record(conn: sqlite3.Connection, key: str, digest: str, state: str, payload: TargetJob) -> None:
         conn.execute(
             "INSERT INTO outcomes VALUES (?, ?, ?, ?)",
             (key, digest, state, json.dumps(payload)),
         )
 
-    def jobs(self) -> list[dict]:
+    def jobs(self) -> list[TargetJob]:
         with self.transaction() as conn:
             return [json.loads(row["payload"]) for row in conn.execute("SELECT payload FROM outcomes")]
